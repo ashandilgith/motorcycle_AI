@@ -81,3 +81,12 @@ def test_assistant_tool_loop():
     out = assistant.chat(store, bike["id"], [{"role": "user", "content": "Ayaw mag start"}], client=FakeLLM())
     assert out["tools_used"] == ["get_bike_profile"]
     assert "battery" in out["reply"]
+
+
+def test_input_validation():
+    c = client()
+    assert c.post("/ride/alert", json={"points": [[0, 0], [0, 1], [0, 2]], "position": [999, 0], "speed_kmh": 10}).status_code == 422
+    bike = c.post("/bikes", json={"make": "Honda", "model": "Click"}).json()
+    assert c.post(f"/bikes/{bike['id']}/service", json={"item": "engine_oil", "odometer_km": -5}).status_code == 422
+    assert c.post("/bikes", json={"make": "Honda", "model": "Click", "odometer_km": -1}).status_code == 422
+    assert c.post("/clips/nope/label", json={"label": "x"}).status_code == 404

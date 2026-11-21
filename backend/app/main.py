@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -26,7 +26,7 @@ from .sound import anomaly
 from .sound.features import embed, read_wav
 from .storage import Store
 
-LatLonIn = tuple[float, float]
+LatLonIn = tuple[Annotated[float, Field(ge=-90, le=90)], Annotated[float, Field(ge=-180, le=180)]]
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 
@@ -35,13 +35,13 @@ class BikeIn(BaseModel):
     make: str = Field(examples=["Honda"])
     model: str = Field(examples=["Click 125"])
     year: int | None = None
-    odometer_km: float = 0
+    odometer_km: float = Field(0, ge=0)
     usage: Literal["commuter", "gig", "diy"] = "commuter"
 
 
 class ServiceIn(BaseModel):
     item: str = Field(examples=["engine_oil"])
-    odometer_km: float
+    odometer_km: float = Field(ge=0)
     cost_php: float | None = None
     notes: str | None = None
 
@@ -175,7 +175,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.get("/weather")
     def road_weather(lat: float, lon: float):
-        return asdict(weather.road_weather((lat, lon)))
+        try:
+            return asdict(weather.road_weather((lat, lon)))
+        except Exception as exc:  # upstream down: tell the phone, which keeps its last value
+            raise HTTPException(503, f"weather unavailable: {exc}")
 
     @app.post("/routes/curves/from-points")
     def curves_from_points(body: PointsIn):
@@ -213,7 +216,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/clips/{clip_id}/label")
     def label_clip(clip_id: str, body: LabelIn, req: Request):
         """Mechanic-confirmed finding -> training label for the future fault classifier."""
-        store(req).label_clip(clip_id, body.label)
+        if not store(req).label_clip(clip_id, body.label):
+            raise HTTPException(404, "clip not found")
         return {"ok": True}
 
     # Tyre (VLM)

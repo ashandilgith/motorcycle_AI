@@ -96,8 +96,15 @@ def evaluate(
                 action_distance_m=act,
                 speed_kmh=speed_kmh,
                 safe_kmh=safe,
-                message_tl=f"Preno na! Bagalan sa {_r(safe)}." if act < 5 else f"Kurba in {r5} metro{wet_tl}. Bagalan sa {_r(safe)}.",
-                message_en=f"Brake now! Slow to {_r(safe)}." if act < 5 else f"Curve in {r5} metres{wet_en}. Slow to {_r(safe)}.",
+                # Inside the curve: never "brake now" (hard braking while leaned over, esp. wet, can cause a fall).
+                message_tl=(
+                    "Masyadong mabilis sa kurba. Dahan-dahan." if d == 0
+                    else f"Preno na! Bagalan sa {_r(safe)}." if act < 5 else f"Kurba in {r5} metro{wet_tl}. Bagalan sa {_r(safe)}."
+                ),
+                message_en=(
+                    "Too fast for this curve. Ease off gently." if d == 0
+                    else f"Brake now! Slow to {_r(safe)}." if act < 5 else f"Curve in {r5} metres{wet_en}. Slow to {_r(safe)}."
+                ),
             )
     return worst
 

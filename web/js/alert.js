@@ -83,8 +83,10 @@ export function evaluate(positionM, speedKmh, curves, { wet = false, night = fal
       const r5 = Math.round(act / 5) * 5;
       worst = {
         level, curve: c, distanceM: d, actionM: act, speedKmh, safeKmh: safe,
-        messageTl: act < 5 ? `Preno na! Bagalan sa ${Math.round(safe)}.` : `Kurba in ${r5} metro${wet ? ", basa ang kalsada" : ""}. Bagalan sa ${Math.round(safe)}.`,
-        messageEn: act < 5 ? `Brake now! Slow to ${Math.round(safe)}.` : `Curve in ${r5} metres${wet ? " on a wet road" : ""}. Slow to ${Math.round(safe)}.`,
+        inCurve: d === 0,
+        // Inside the curve: never "brake now" (hard braking while leaned over, esp. wet, can cause a fall).
+        messageTl: d === 0 ? "Masyadong mabilis sa kurba. Dahan-dahan." : act < 5 ? `Preno na! Bagalan sa ${Math.round(safe)}.` : `Kurba in ${r5} metro${wet ? ", basa ang kalsada" : ""}. Bagalan sa ${Math.round(safe)}.`,
+        messageEn: d === 0 ? "Too fast for this curve. Ease off gently." : act < 5 ? `Brake now! Slow to ${Math.round(safe)}.` : `Curve in ${r5} metres${wet ? " on a wet road" : ""}. Slow to ${Math.round(safe)}.`,
       };
     }
   }

@@ -181,3 +181,29 @@ def test_shops_endpoint(keys):
     c = TestClient(create_app(db_path=":memory:"))
     r = c.get("/shops/nearby", params={"lat": 14.6, "lon": 121.0})
     assert r.status_code == 200 and r.json()[0]["phone"]
+
+
+def test_weather_endpoint_503_when_upstream_down():
+    http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))
+    r = TestClient(create_app(db_path=":memory:")).get("/weather", params={"lat": 14.6, "lon": 121.0})
+    assert r.status_code == 503
+
+
+def test_overpass_falls_back_to_mirror():
+    seen = []
+
+    def h(req):
+        seen.append(req.url.host)
+        if req.url.host == "overpass-api.de":
+            return httpx.Response(502, text="# 502 Gateway Timeout")
+        return httpx.Response(200, json=overpass_payload())
+
+    http.set_transport(httpx.MockTransport(h))
+    graph = osm.fetch_roads(ORIGIN)
+    assert seen == ["overpass-api.de", "overpass.kumi.systems"] and graph.adj
+
+
+def test_overpass_all_down_reports_each_server():
+    http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))
+    with pytest.raises(RuntimeError, match="overpass-api.de.*overpass.kumi.systems"):
+        osm.fetch_roads(ORIGIN)

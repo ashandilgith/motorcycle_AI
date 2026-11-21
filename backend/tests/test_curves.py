@@ -75,3 +75,11 @@ def test_decode_polyline_google_example():
     # Example from Google's polyline documentation
     pts = decode_polyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@")
     assert pts == [(38.5, -120.2), (40.7, -120.95), (43.252, -126.453)]
+
+
+def test_never_says_brake_inside_a_curve():
+    _, _, curves = find_curves(road_with_curve(radius_m=40))
+    c = curves[0]
+    inside = evaluate((c.start_m + c.end_m) / 2, 60, curves)
+    assert inside.level == AlertLevel.URGENT
+    assert "Brake" not in inside.message_en and "Ease off" in inside.message_en

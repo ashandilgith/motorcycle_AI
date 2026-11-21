@@ -37,7 +37,7 @@ def start_ride(
 
     if not route:
         try:
-            graph = osm.fetch_roads(position, radius_m=max(lookahead_m, 500))
+            graph = osm.fetch_roads(position, radius_m=min(max(lookahead_m, 500), 1000))
             route = osm.road_ahead(graph, position, heading_deg, lookahead_m)
             source = "osm_road_ahead"
             if heading_deg is None:

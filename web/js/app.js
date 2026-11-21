@@ -9,7 +9,13 @@ const $ = (id) => document.getElementById(id);
 const API = ""; // same origin as the backend that serves this page
 
 const OFF_ROUTE_M = 40;
-const OFF_ROUTE_FIXES = 5;
+const OFF_ROUTE_FIXES = 3;
+const BEHIND_START_OFF_M = 15;   // before the start of the fetched path and drifting away = wrong direction
+const MAX_ACCURACY_M = 30;       // ignore worse GPS fixes
+const SPEED_WINDOW_MS = 3000;    // speed from distance over ~3 s when the phone gives no speed
+const HEADING_MIN_MOVE_M = 15;   // direction from movement once we've moved this far
+const WAIT_FOR_HEADING_MS = 20_000;
+const GPS_LOST_MS = 10_000;
 const REFETCH_NEAR_END_M = 300;
 const MIN_REFETCH_MS = 10_000;
 const WEATHER_EVERY_MS = 10 * 60_000;
@@ -31,6 +37,7 @@ let wetOverride = false;
 let watchId = null, demoTimer = null, wakeLock = null, weatherTimer = null;
 let lastFix = null, offCount = 0, lastFetch = 0, fetching = false;
 let lastLevel = Level.NONE, cautionedCurve = null, announcedHotspots = new Set();
+let fixes = [], startedAt = 0, lastGoodFixAt = 0, gpsTimer = null, heldAlert = null, lowerCount = 0, liveStatus = "";
 
 // ---------- backend ----------
 async function fetchRide(position, heading) {
@@ -44,7 +51,9 @@ async function fetchRide(position, heading) {
     const r = await fetch(`${API}/ride/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     setRide(await r.json());
-    setStatus(`Live · ${ride.curves.length} curves`, true);
+    const tags = shortWarnings(ride.warnings || []);
+    liveStatus = `Live · ${ride.curves.length} curves${tags ? " · " + tags : ""}`;
+    setStatus(liveStatus, !tags.includes("no road"));
   } catch (e) {
     setStatus(`Road data failed: ${e.message}`);
   } finally {
@@ -52,10 +61,21 @@ async function fetchRide(position, heading) {
   }
 }
 
+/** Turn backend warnings into a few words for the status chip. */
+function shortWarnings(ws) {
+  const tags = new Set();
+  for (const w of ws) {
+    if (/Weather/i.test(w)) tags.add("no weather");
+    else if (/OpenStreetMap fetch failed|No usable road/i.test(w)) tags.add("no road data");
+    else if (/Google route failed/i.test(w)) tags.add("map fallback");
+  }
+  return [...tags].join(", ");
+}
+
 function setRide(data) {
   const points = data.points || [];
   ride = { ...data, points, cum: cumulative(points), curves: data.curves || [], hotspots: data.hotspots || [] };
-  offCount = 0; cautionedCurve = null; announcedHotspots = new Set();
+  offCount = 0; cautionedCurve = null; announcedHotspots = new Set(); heldAlert = null; lowerCount = 0;
   for (const w of data.warnings || []) console.warn(w);
 }
 
@@ -74,21 +94,35 @@ async function refreshWeather(position) {
 function onFix(position, speedKmh, heading) {
   $("speed").textContent = Math.round(speedKmh);
   if (!ride || ride.points.length < 2) {
-    if (!demoTimer) fetchRide(position, heading);
+    if (demoTimer) return;
+    // Without a destination we need the direction of travel, or we may load the road behind the rider.
+    const needHeading = !parseLatLon(settings.destination) && heading == null && Date.now() - startedAt < WAIT_FOR_HEADING_MS;
+    if (needHeading) { setInstruction("", "Start riding", "Finding your direction…", true); return; }
+    fetchRide(position, heading);
     return;
   }
   const { alongM, offM } = distanceAlong(ride.points, ride.cum, position);
 
-  // left the path, or near the end of an OSM "road ahead" -> get fresh road
-  offCount = offM > OFF_ROUTE_M ? offCount + 1 : 0;
+  // left the path, rode the other way, or near the end of an OSM "road ahead" -> get fresh road
+  const wrongWay = alongM < 2 && offM > BEHIND_START_OFF_M;
+  offCount = offM > OFF_ROUTE_M || wrongWay ? offCount + 1 : 0;
   const nearEnd = ride.source === "osm_road_ahead" && ride.cum.at(-1) - alongM < REFETCH_NEAR_END_M;
   if (!demoTimer && (offCount >= OFF_ROUTE_FIXES || nearEnd)) fetchRide(position, heading);
 
   const cond = conditions();
-  const alert = evaluate(alongM, speedKmh, ride.curves, cond);
+  const alert = steady(evaluate(alongM, speedKmh, ride.curves, cond));
   const hotspot = hotspotAhead(alongM, ride.hotspots);
   render(alongM, speedKmh, alert, hotspot, cond);
   sound(alert, hotspot);
+}
+
+/** Escalate at once; step down only after 2 fixes in a row at the lower level (stops flicker from GPS noise). */
+const RANK = { none: 0, caution: 1, urgent: 2 };
+function steady(alert) {
+  if (demoTimer || !heldAlert || RANK[alert.level] >= RANK[heldAlert.level]) { lowerCount = 0; heldAlert = alert; return alert; }
+  lowerCount += 1;
+  if (lowerCount >= 2) { lowerCount = 0; heldAlert = alert; return alert; }
+  return { ...heldAlert, speedKmh: alert.speedKmh };
 }
 
 function conditions() {
@@ -133,7 +167,8 @@ function render(alongM, speedKmh, alert, hotspot, cond) {
   if (alert.level !== Level.NONE) {
     const act = r5(alert.actionM);
     const sub = alert.level === Level.URGENT ? `Brake to ${Math.round(alert.safeKmh)} km/h` : `Ease off to ${Math.round(alert.safeKmh)} km/h`;
-    if (act < 5) setInstruction("", "BRAKE NOW", sub, true);
+    if (alert.inCurve) setInstruction("", "TOO FAST", `Ease off gently to ${Math.round(alert.safeKmh)}`, true);
+    else if (act < 5) setInstruction("", "BRAKE NOW", sub, true);
     else setInstruction("Curve in", act, sub);
   } else if (hotspot) {
     level = "hotspot";
@@ -141,7 +176,9 @@ function render(alongM, speedKmh, alert, hotspot, cond) {
   } else if (next && next.start_m <= alongM) {
     setInstruction("", "In curve", `Hold ${Math.round(safeOf(next))} km/h or less`, true);
   } else if (next) {
-    setInstruction("Curve in", r5(actionDistanceM(next.start_m - alongM, speedKmh)), "Speed OK");
+    const act = r5(actionDistanceM(next.start_m - alongM, speedKmh));
+    if (act < 5) setInstruction("", "Curve now", "Speed OK", true);
+    else setInstruction("Curve in", act, "Speed OK");
   } else {
     setInstruction("", "Clear road", "No sharp curves ahead", true);
   }
@@ -171,15 +208,47 @@ function renderWet() {
 
 // ---------- GPS ----------
 function onPosition(pos) {
-  const p = [pos.coords.latitude, pos.coords.longitude];
-  let speedKmh = pos.coords.speed != null && !Number.isNaN(pos.coords.speed) ? pos.coords.speed * 3.6 : null;
-  if (speedKmh == null && lastFix) {
-    const dt = (pos.timestamp - lastFix.t) / 1000;
-    if (dt > 0) speedKmh = (haversine(lastFix.p, p) / dt) * 3.6;
+  const c = pos.coords;
+  if (c.accuracy != null && c.accuracy > MAX_ACCURACY_M) return gpsWeak(`GPS weak (±${Math.round(c.accuracy)} m)`);
+  const p = [c.latitude, c.longitude];
+  const t = pos.timestamp || Date.now();
+  lastGoodFixAt = Date.now();
+  if (liveStatus && /GPS/.test($("status").textContent)) setStatus(liveStatus, true);
+  fixes.push({ p, t });
+  while (fixes.length > 2 && t - fixes[0].t > 8000) fixes.shift();
+
+  // Speed: the phone's own (Doppler) speed when it has one; else distance over the last ~3 s (smooths GPS jitter).
+  let speedKmh = c.speed != null && !Number.isNaN(c.speed) ? c.speed * 3.6 : null;
+  if (speedKmh == null) {
+    const old = [...fixes].reverse().find((f) => t - f.t >= SPEED_WINDOW_MS) || fixes[0];
+    const dt = (t - old.t) / 1000;
+    speedKmh = dt > 0 ? (haversine(old.p, p) / dt) * 3.6 : 0;
   }
-  lastFix = { p, t: pos.timestamp };
-  const heading = pos.coords.heading != null && !Number.isNaN(pos.coords.heading) && (speedKmh ?? 0) > 5 ? pos.coords.heading : null;
-  onFix(p, speedKmh ?? 0, heading);
+  // Heading: the phone's own when moving; else the bearing from where we were ≥15 m ago.
+  let heading = c.heading != null && !Number.isNaN(c.heading) && speedKmh > 5 ? c.heading : null;
+  if (heading == null) {
+    const back = [...fixes].reverse().find((f) => haversine(f.p, p) >= HEADING_MIN_MOVE_M);
+    if (back) heading = bearing(back.p, p);
+  }
+  lastFix = { p, t };
+  onFix(p, speedKmh, heading);
+}
+
+function gpsWeak(text) { setStatus(text); }
+
+function onGpsError(e) {
+  // Errors are often transient (timeouts); only report if we've really had no fix for a while.
+  if (Date.now() - lastGoodFixAt > GPS_LOST_MS) {
+    const why = { 1: "permission denied", 2: "no signal", 3: "no fix yet" }[e.code] || e.message || "error";
+    setStatus(`GPS: ${why}`);
+  }
+}
+
+function bearing(a, b) {
+  const r = (d) => (d * Math.PI) / 180;
+  const y = Math.sin(r(b[1] - a[1])) * Math.cos(r(b[0]));
+  const x = Math.cos(r(a[0])) * Math.sin(r(b[0])) - Math.sin(r(a[0])) * Math.cos(r(b[0])) * Math.cos(r(b[1] - a[1]));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
 function haversine(a, b) {
@@ -196,17 +265,20 @@ async function start() {
   if (!("geolocation" in navigator)) return setStatus("No GPS on this device");
   if (!window.isSecureContext) return setStatus("GPS needs HTTPS (see README)");
   setStatus("Waiting for GPS…");
-  watchId = navigator.geolocation.watchPosition(onPosition, (e) => setStatus(`GPS: ${e.message}`), {
+  startedAt = Date.now(); lastGoodFixAt = Date.now(); fixes = []; heldAlert = null; liveStatus = "";
+  watchId = navigator.geolocation.watchPosition(onPosition, onGpsError, {
     enableHighAccuracy: true, maximumAge: 0, timeout: 15000,
   });
+  gpsTimer = setInterval(() => { if (Date.now() - lastGoodFixAt > GPS_LOST_MS) setStatus("GPS: no fix"); }, 5000);
   weatherTimer = setInterval(() => lastFix && refreshWeather(lastFix.p), WEATHER_EVERY_MS);
   setRunning(true);
 }
 
 function stop() {
   if (watchId != null) navigator.geolocation.clearWatch(watchId);
-  clearInterval(weatherTimer); clearInterval(demoTimer);
-  watchId = weatherTimer = demoTimer = null;
+  clearInterval(weatherTimer); clearInterval(demoTimer); clearInterval(gpsTimer);
+  watchId = weatherTimer = demoTimer = gpsTimer = null;
+  fixes = []; heldAlert = null; liveStatus = "";
   beeper.stop();
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   wakeLock?.release?.(); wakeLock = null;

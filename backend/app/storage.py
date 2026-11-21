@@ -101,5 +101,8 @@ class Store:
             (bike_id, limit),
         )
 
-    def label_clip(self, clip_id: str, label: str) -> None:
-        self._exec("UPDATE sound_clips SET label=? WHERE id=?", (label, clip_id))
+    def label_clip(self, clip_id: str, label: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("UPDATE sound_clips SET label=? WHERE id=?", (label, clip_id))
+            self._conn.commit()
+            return cur.rowcount > 0

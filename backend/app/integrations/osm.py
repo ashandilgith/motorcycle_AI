@@ -16,7 +16,13 @@ from dataclasses import dataclass
 from ..curves.geometry import LatLon, haversine_m, to_local_xy
 from .http import client
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Public servers are often overloaded (field check 21 Nov 2026: main server 502, mirrors >40 s for a
+# 1.5 km query in Sampaloc; 600 m took 31 s). Try them in order with short timeouts; self-host before launch.
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+OVERPASS_TIMEOUT_S = 12
 ROAD_TYPES = (
     "trunk|primary|secondary|tertiary|unclassified|residential|living_street|service"
     "|trunk_link|primary_link|secondary_link|tertiary_link"
@@ -50,14 +56,19 @@ def parse_overpass(data: dict) -> RoadGraph:
     return RoadGraph(nodes, adj, oneway)
 
 
-def fetch_roads(position: LatLon, radius_m: float = 1500) -> RoadGraph:
+def fetch_roads(position: LatLon, radius_m: float = 800) -> RoadGraph:
     query = (
-        f'[out:json][timeout:25];way(around:{radius_m:.0f},{position[0]},{position[1]})'
+        f'[out:json][timeout:{OVERPASS_TIMEOUT_S}];way(around:{radius_m:.0f},{position[0]},{position[1]})'
         f'[highway~"^({ROAD_TYPES})$"];(._;>;);out body;'
     )
-    with client(timeout=30) as c:
-        data = c.post(OVERPASS_URL, data={"data": query}).raise_for_status().json()
-    return parse_overpass(data)
+    errors = []
+    for url in OVERPASS_URLS:
+        try:
+            with client(timeout=OVERPASS_TIMEOUT_S + 3) as c:
+                return parse_overpass(c.post(url, data={"data": query}).raise_for_status().json())
+        except Exception as exc:  # try the next server
+            errors.append(f"{url.split('/')[2]}: {type(exc).__name__}")
+    raise RuntimeError("all Overpass servers failed: " + "; ".join(errors))
 
 
 def _bearing(a: LatLon, b: LatLon) -> float:
