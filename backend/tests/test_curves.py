@@ -2,7 +2,7 @@ import math
 
 from app.curves.alert import AlertLevel, RideConditions, evaluate, required_distance_m
 from app.curves.geometry import circumradius, distance_along, find_curves, safe_speed_kmh
-from app.curves.sources import decode_polyline
+from app.integrations.google_maps import decode_polyline
 
 from .helpers import ORIGIN, offset, road_with_curve
 

@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 from .config import settings
 from .curves import alert as alert_mod
 from .curves.geometry import distance_along, find_curves
-from .curves.sources import google_route
+from .integrations import google_maps, weather
+from .ride import start_ride
 from .llm import assistant, vision
 from .maintenance import next_due
 from .sound import anomaly
@@ -57,7 +58,15 @@ class AlertIn(BaseModel):
     night: bool = False
 
 
+class RideStartIn(BaseModel):
+    position: LatLonIn
+    destination: LatLonIn | None = None
+    heading_deg: float | None = Field(None, ge=0, lt=360, description="GPS course over ground")
+    lookahead_m: float = Field(1500, ge=200, le=5000)
+
+
 class ChatIn(BaseModel):
+    location: LatLonIn | None = Field(None, description="Rider's position, enables the shop-finder tool")
     messages: list[dict] = Field(examples=[[{"role": "user", "content": "Mga paps, ayaw mag start, may pumipitik lang"}]])
 
 
@@ -111,13 +120,37 @@ def create_app(db_path: str | None = None) -> FastAPI:
         _, _, curves = find_curves(points)
         return {"count": len(curves), "curves": [asdict(c) for c in curves]}
 
-    @app.post("/routes/curves")
-    async def route_curves(body: RouteIn):
-        """Fetch a route from Google Directions and return its curves (sent to the phone once per ride)."""
+    def maps_key() -> str:
         if not settings.google_maps_api_key:
-            raise HTTPException(503, "GOOGLE_MAPS_API_KEY not set; use /routes/curves/from-points")
-        points = await google_route(body.origin, body.destination, settings.google_maps_api_key)
+            raise HTTPException(503, "GOOGLE_MAPS_API_KEY not set")
+        return settings.google_maps_api_key
+
+    @app.post("/routes/curves")
+    def route_curves(body: RouteIn):
+        """Fetch a route from the Google Routes API and return its curves (sent to the phone once per ride)."""
+        try:
+            points = google_maps.route(body.origin, body.destination, maps_key(), settings.route_travel_mode)
+        except google_maps.MapsError as exc:
+            raise HTTPException(502, str(exc))
         return {"points": points, **_curves_payload(points)}
+
+    @app.post("/ride/start")
+    def ride_start(body: RideStartIn):
+        """Everything the phone needs at ride start: route/road ahead, curves, weather, hotspots."""
+        return start_ride(body.position, body.destination, body.heading_deg, body.lookahead_m)
+
+    @app.post("/roads/snap")
+    def roads_snap(body: PointsIn):
+        """Snap a recorded GPS trace to roads (Google Roads API)."""
+        return {"points": google_maps.snap_to_roads(body.points, maps_key())}
+
+    @app.get("/shops/nearby")
+    def shops_nearby(lat: float, lon: float, open_now: bool = True, radius_m: float = 3000):
+        return google_maps.repair_shops((lat, lon), maps_key(), radius_m=radius_m, open_now=open_now)
+
+    @app.get("/weather")
+    def road_weather(lat: float, lon: float):
+        return asdict(weather.road_weather((lat, lon)))
 
     @app.post("/routes/curves/from-points")
     def curves_from_points(body: PointsIn):
@@ -173,7 +206,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def chat(bike_id: str, body: ChatIn, req: Request):
         bike_or_404(req, bike_id)
         try:
-            return assistant.chat(store(req), bike_id, body.messages)
+            return assistant.chat(store(req), bike_id, body.messages, location=body.location)
         except RuntimeError as exc:
             raise HTTPException(503, str(exc))
 

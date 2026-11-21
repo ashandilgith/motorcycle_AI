@@ -16,12 +16,15 @@ Most Manila riders are on Android, so start there.
 
 Port `backend/app/curves/geometry.py` (`distance_along`) and `backend/app/curves/alert.py` (`evaluate`) as they are. Both are pure functions.
 
-1. When a ride starts, call `POST /routes/curves`, which returns `points` and `curves`. Cache both.
+1. When a ride starts, call `POST /ride/start {position, heading_deg, destination?}`. Cache `points`, `curves`, `hotspots` and `conditions`.
 2. On each GPS fix (`speed`, `lat`, `lon`):
    1. Compute `pos_m = distance_along(points, cum, position)`.
    2. Compute `alert = evaluate(pos_m, speed_kmh, curves, RideConditions(wet, night))`.
    3. If the level rises to CAUTION, play a single beep. If it rises to URGENT, speak `message_tl`.
-3. Refresh `wet` from the weather every 10 minutes.
-4. If `off_route_m` stays above 40 m for 5 s, re-fetch the route.
+   4. Call `hotspot_ahead(pos_m, hotspots)`. Speak it once per hotspot.
+3. Refresh `wet` every 10 minutes with `GET /weather`.
+4. Call `/ride/start` again when either:
+    - you are more than 40 m off the path for 5 s (took a turn), or
+    - you are within 300 m of the end of an OSM "road ahead".
 
 Tune the constants in `alert.py` (braking, reaction time, caution factor) and the dry/wet lateral grip in `geometry.py` with real riders before release.

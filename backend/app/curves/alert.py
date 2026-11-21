@@ -92,5 +92,27 @@ def evaluate(
     return worst
 
 
+HOTSPOT_WARN_M = 150.0
+
+
+def hotspot_ahead(position_m: float, hotspots: list[dict]) -> dict | None:
+    """Next known crash hotspot within HOTSPOT_WARN_M ahead (hotspots carry `at_m`), or None.
+
+    Announce once per hotspot (the phone keeps track), e.g.
+    "Paps, delikadong intersection sa unahan, ingat."
+    """
+    for h in hotspots:
+        d = h["at_m"] - position_m
+        if 0 <= d <= HOTSPOT_WARN_M:
+            name = h.get("name") or "crash hotspot"
+            return {
+                **h,
+                "distance_m": round(d),
+                "message_tl": f"Paps, delikadong lugar sa unahan, {round(d, -1):.0f} metro: {name}. Ingat.",
+                "message_en": f"Crash hotspot in {round(d, -1):.0f} m: {name}. Take care.",
+            }
+    return None
+
+
 def _rank(level: AlertLevel) -> int:
     return {AlertLevel.NONE: 0, AlertLevel.CAUTION: 1, AlertLevel.URGENT: 2}[level]

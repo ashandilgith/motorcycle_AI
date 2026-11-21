@@ -1,0 +1,5 @@
+{
+  "type": "FeatureCollection",
+  "_comment": "Empty on purpose. Add Point features from MMDA/LGU crash data: properties {name, source, crashes}.",
+  "features": []
+}
