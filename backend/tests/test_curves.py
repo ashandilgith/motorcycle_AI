@@ -51,8 +51,12 @@ def test_alert_levels():
     assert evaluate(start - 390, 70, curves).level == AlertLevel.NONE        # still far away
     assert evaluate(start - 80, 70, curves).level == AlertLevel.CAUTION
     assert evaluate(start - 30, 70, curves).level == AlertLevel.URGENT
-    urgent = evaluate(start - 30, 70, curves, RideConditions(wet=True))
-    assert "basa" in urgent.message_tl
+    urgent = evaluate(start - 60, 70, curves, RideConditions(wet=True))
+    assert urgent.level == AlertLevel.URGENT and "basa" in urgent.message_tl
+    # 70 km/h covers ~29 m in the 1.5 s reaction time: the rider is told the distance left after reacting
+    assert abs(urgent.action_distance_m - (60 - 70 / 3.6 * 1.5)) < 1e-6
+    assert "Kurba in 30 metro" in urgent.message_tl
+    assert evaluate(start - 25, 70, curves).message_en.startswith("Brake now")
 
 
 def test_wet_road_warns_earlier():

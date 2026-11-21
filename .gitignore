@@ -7,3 +7,11 @@ venv/
 *.db
 *.gpx
 .DS_Store
+demo_video/frames_*/
+demo_video/*.mp4
+demo_video/*.wav
+demo_video/*.jpg
+demo_video/*.png
+demo_video/*.json
+demo_video/list.txt
+demo_video/app

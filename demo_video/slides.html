@@ -1,0 +1,76 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;background:#0b0d10;font-family:Inter,system-ui,sans-serif;color:#f4f6f8}
+  .slide{width:1920px;height:1080px;box-sizing:border-box;padding:110px 140px;display:none;position:relative;overflow:hidden;
+    background:radial-gradient(90% 80% at 80% 10%,#1d2a44 0%,#0b0d10 60%)}
+  .slide.on{display:flex;flex-direction:column;justify-content:center}
+  .kicker{font-size:30px;letter-spacing:6px;text-transform:uppercase;color:#60a5fa;font-weight:800;margin-bottom:28px}
+  h1{font-size:150px;line-height:.95;margin:0;font-weight:900;letter-spacing:-4px}
+  h2{font-size:84px;line-height:1.02;margin:0 0 30px;font-weight:900;letter-spacing:-2px}
+  .sub{font-size:46px;color:#cbd5e1;font-weight:600;margin-top:34px;max-width:1400px;line-height:1.25}
+  .src{position:absolute;bottom:60px;left:140px;font-size:24px;color:#7c8696}
+  .big{color:#ef4444}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:36px;margin-top:40px}
+  .step{background:#141922;border:2px solid #232a36;border-radius:28px;padding:40px}
+  .step b{display:block;font-size:72px;color:#3b82f6;font-weight:900;margin-bottom:10px}
+  .step h3{font-size:40px;margin:0 0 12px}
+  .step p{font-size:28px;color:#aab3c0;margin:0;line-height:1.35}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:30px;margin-top:20px}
+  .card{background:#141922;border:2px solid #232a36;border-radius:26px;padding:34px 36px;min-height:250px}
+  .card .ic{width:64px;height:64px;border-radius:18px;display:grid;place-items:center;font-size:34px;margin-bottom:20px;font-weight:900}
+  .card h3{font-size:36px;margin:0 0 10px}
+  .card p{font-size:26px;color:#aab3c0;margin:0;line-height:1.35}
+  .tag{display:inline-block;font-size:20px;font-weight:800;letter-spacing:2px;padding:6px 12px;border-radius:999px;margin-left:10px;vertical-align:middle}
+  .mvp{background:#14532d;color:#86efac}.next{background:#1e293b;color:#93c5fd}
+  .beep{display:inline-flex;gap:14px;margin-top:50px}
+  .beep i{width:34px;height:120px;border-radius:10px;background:#ef4444;display:block}
+  .beep i:nth-child(2){height:80px;margin-top:20px}.beep i:nth-child(3){height:120px}
+</style></head><body>
+
+<section class="slide" id="title">
+  <div class="kicker">MVP demo · Metro Manila</div>
+  <h1>Moto AI</h1>
+  <div class="sub">It beeps <span class="big">before</span> the curve when you're too fast for it, with your reaction time already counted in.</div>
+  <div class="beep"><i></i><i></i><i></i></div>
+</section>
+
+<section class="slide" id="problem">
+  <div class="kicker">Why</div>
+  <h2>Motorcyclists are <span class="big">53%</span> of road deaths in the Philippines.</h2>
+  <div class="sub">A blind curve taken too fast leaves no time to fix it. The warning has to come while there's still road left to brake.</div>
+  <div class="src">Source: DPWH road-fatality figures, reported by Carmudi</div>
+</section>
+
+<section class="slide" id="how">
+  <div class="kicker">How the alert works</div>
+  <h2>Reads the road ahead. Warns in time.</h2>
+  <div class="steps">
+    <div class="step"><b>1</b><h3>Finds the curves</h3><p>Your planned route (Google Maps), or the road you're on (OpenStreetMap).</p></div>
+    <div class="step"><b>2</b><h3>Safe speed per curve</h3><p>From how sharp it is. Lower when the road is wet; rain is detected automatically.</p></div>
+    <div class="step"><b>3</b><h3>Too fast? Beeps</h3><p>Distance shown = what's left after your 1.5 s reaction. Beeps repeat until you're safe.</p></div>
+  </div>
+</section>
+
+<section class="slide" id="features">
+  <div class="kicker">What's in the MVP</div>
+  <div class="grid">
+    <div class="card"><div class="ic" style="background:#7f1d1d">!</div><h3>Curve-speed alert <span class="tag mvp">LIVE</span></h3><p>Sharp repeating beeps; Taglish or English voice optional. Works without a destination.</p></div>
+    <div class="card"><div class="ic" style="background:#1e3a8a">☂</div><h3>Rain-aware <span class="tag mvp">LIVE</span></h3><p>Wet road = lower safe speeds and earlier warnings. Manual wet toggle too.</p></div>
+    <div class="card"><div class="ic" style="background:#1e40af">◎</div><h3>Crash hotspots <span class="tag mvp">LIVE</span></h3><p>One low tone before known danger spots (fed from MMDA/LGU crash data).</p></div>
+    <div class="card"><div class="ic" style="background:#14532d">♪</div><h3>Engine sound check <span class="tag next">BACKEND</span></h3><p>Record 10 s; AI flags sounds that differ from your bike's healthy baseline.</p></div>
+    <div class="card"><div class="ic" style="background:#713f12">◉</div><h3>Tyre photo check <span class="tag next">BACKEND</span></h3><p>Snap the tyre: wear, cracks, bulges, nails, and its age code.</p></div>
+    <div class="card"><div class="ic" style="background:#4c1d95">?</div><h3>AI assistant <span class="tag next">BACKEND</span></h3><p>Knows your model and service log. Triage, what's due, open shops nearby.</p></div>
+  </div>
+</section>
+
+<section class="slide" id="end">
+  <div class="kicker">Moto AI · MVP</div>
+  <h1 style="font-size:120px">Ride safe, paps.</h1>
+  <div class="sub">Web app today (add to home screen), Android app next.<br>github.com/ashandilgith/motorcycle_AI</div>
+</section>
+
+<script>
+window.show = (id) => { document.querySelectorAll(".slide").forEach(s => s.classList.toggle("on", s.id === id)); };
+</script>
+</body></html>

@@ -29,6 +29,7 @@ class Alert:
     level: AlertLevel
     curve: Curve | None = None
     distance_to_curve_m: float | None = None
+    action_distance_m: float | None = None   # after reaction time; shown to the rider
     speed_kmh: float | None = None
     safe_kmh: float | None = None
     message_tl: str | None = None   # Taglish voice line
@@ -41,6 +42,11 @@ REACTION_S = 1.5
 CAUTION_FACTOR = 1.6         # warn earlier than the bare minimum
 LOOKAHEAD_M = 400.0
 NIGHT_SPEED_FACTOR = 0.9
+
+
+def action_distance_m(distance_m: float, speed_kmh: float) -> float:
+    """Distance left to the curve once the rider has reacted (REACTION_S at current speed). This is what we show."""
+    return max(0.0, distance_m - speed_kmh / 3.6 * REACTION_S)
 
 
 def required_distance_m(speed_kmh: float, target_kmh: float) -> float:
@@ -79,15 +85,19 @@ def evaluate(
         else:
             continue
         if _rank(level) > _rank(worst.level):
-            wet = ", basa ang kalsada" if conditions.wet else ""
+            act = action_distance_m(d, speed_kmh)
+            r5 = _r(act / 5) * 5
+            wet_tl = ", basa ang kalsada" if conditions.wet else ""
+            wet_en = " on a wet road" if conditions.wet else ""
             worst = Alert(
                 level=level,
                 curve=c,
                 distance_to_curve_m=d,
+                action_distance_m=act,
                 speed_kmh=speed_kmh,
                 safe_kmh=safe,
-                message_tl=f"Paps, matalim na kurba {round(d, -1):.0f} metro{wet}. Bagalan sa {safe:.0f}.",
-                message_en=f"Sharp curve in {round(d, -1):.0f} m{' on a wet road' if conditions.wet else ''}. Slow to {safe:.0f} km/h.",
+                message_tl=f"Preno na! Bagalan sa {_r(safe)}." if act < 5 else f"Kurba in {r5} metro{wet_tl}. Bagalan sa {_r(safe)}.",
+                message_en=f"Brake now! Slow to {_r(safe)}." if act < 5 else f"Curve in {r5} metres{wet_en}. Slow to {_r(safe)}.",
             )
     return worst
 
@@ -109,9 +119,14 @@ def hotspot_ahead(position_m: float, hotspots: list[dict]) -> dict | None:
                 **h,
                 "distance_m": round(d),
                 "message_tl": f"Paps, delikadong lugar sa unahan, {round(d, -1):.0f} metro: {name}. Ingat.",
-                "message_en": f"Crash hotspot in {round(d, -1):.0f} m: {name}. Take care.",
+                "message_en": f"Crash hotspot in {round(d, -1):.0f} metres: {name}. Take care.",
             }
     return None
+
+
+def _r(x: float) -> int:
+    """Round half up, exactly like JS Math.round (Python's round() rounds half to even)."""
+    return int(math.floor(x + 0.5))
 
 
 def _rank(level: AlertLevel) -> int:

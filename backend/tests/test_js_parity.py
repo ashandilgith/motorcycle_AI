@@ -26,7 +26,7 @@ const out = {{ along: [], alerts: [], hotspots: [] }};
 for (const pos of p.positions) out.along.push(m.distanceAlong(p.points, cum, pos));
 for (const s of p.scenarios) {{
   const a = m.evaluate(s.pos_m, s.speed, p.curves, {{ wet: s.wet, night: s.night }});
-  out.alerts.push({{ level: a.level, safe: a.safeKmh ?? null, dist: a.distanceM ?? null }});
+  out.alerts.push({{ level: a.level, safe: a.safeKmh ?? null, dist: a.distanceM ?? null, act: a.actionM ?? null, en: a.messageEn ?? null }});
 }}
 for (const x of p.hotspot_pos) {{ const h = m.hotspotAhead(x, p.hotspots); out.hotspots.push(h ? h.distanceM : null); }}
 console.log(JSON.stringify(out));
@@ -64,6 +64,8 @@ def test_js_matches_python():
         if a.safe_kmh is not None:
             assert j["safe"] == pytest.approx(a.safe_kmh)
             assert j["dist"] == pytest.approx(a.distance_to_curve_m)
+            assert j["act"] == pytest.approx(a.action_distance_m)
+            assert j["en"] == a.message_en
 
     for x, j in zip(hotspot_pos, js["hotspots"]):
         h = hotspot_ahead(x, hs)

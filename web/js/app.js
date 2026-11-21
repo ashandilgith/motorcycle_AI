@@ -1,6 +1,9 @@
 // Ride screen: GPS loop -> curve alert -> beeps (and optional voice).
-import { Level, cumulative, distanceAlong, evaluate, hotspotAhead } from "./alert.js";
+import { Level, actionDistanceM, cumulative, distanceAlong, evaluate, hotspotAhead } from "./alert.js";
 import { Beeper, speak } from "./beeper.js";
+let filmSpeak = null;
+// delayMs lets the beeps finish before the voice starts (beeps + voice mode)
+const say = (text, delayMs = 0) => (filmSpeak ? filmSpeak(text, delayMs) : setTimeout(() => speak(text, settings.voiceLang === "tl" ? "fil-PH" : "en-US"), delayMs));
 
 const $ = (id) => document.getElementById(id);
 const API = ""; // same origin as the backend that serves this page
@@ -101,19 +104,19 @@ function sound(alert, hotspot) {
 
   if (alert.level === Level.URGENT) {
     if (beeps) beeper.loop("urgent");                       // keeps beeping until speed is safe
-    if (voice && lastLevel !== Level.URGENT) speak(msg(alert));
+    if (voice && lastLevel !== Level.URGENT) say(msg(alert), beeps ? 400 : 0);
   } else {
     beeper.stop();
     if (alert.level === Level.CAUTION && cautionedCurve !== alert.curve.start_m) {
       cautionedCurve = alert.curve.start_m;                 // once per curve
       if (beeps) beeper.play("caution");
-      if (voice) speak(msg(alert));
+      if (voice) say(msg(alert), beeps ? 400 : 0);
     }
   }
   if (hotspot && alert.level === Level.NONE && !announcedHotspots.has(hotspot.at_m)) {
     announcedHotspots.add(hotspot.at_m);
     if (beeps) beeper.play("hotspot");
-    if (voice) speak(msg(hotspot));
+    if (voice) say(msg(hotspot), beeps ? 550 : 0);
   }
   lastLevel = alert.level;
 }
@@ -121,21 +124,38 @@ function sound(alert, hotspot) {
 // ---------- UI ----------
 function render(alongM, speedKmh, alert, hotspot, cond) {
   const next = ride.curves.find((c) => c.end_m >= alongM && c.start_m - alongM <= 2000);
-  if (next) {
-    const safe = (cond.wet ? next.safe_kmh_wet : next.safe_kmh_dry) * (cond.night ? 0.9 : 1);
-    $("nextDist").textContent = next.start_m <= alongM ? "Now" : `${Math.round(next.start_m - alongM)} m`;
-    $("nextSafe").textContent = `${Math.round(safe)}`;
+  const safeOf = (c) => (cond.wet ? c.safe_kmh_wet : c.safe_kmh_dry) * (cond.night ? 0.9 : 1);
+  $("nextSafe").textContent = next ? `${Math.round(safeOf(next))}` : "—";
+  $("nextDist").textContent = !next ? "—" : next.start_m <= alongM ? "in curve" : `${Math.round(next.start_m - alongM)} m`;
+
+  const r5 = (m) => Math.round(m / 5) * 5;
+  let level = alert.level;
+  if (alert.level !== Level.NONE) {
+    const act = r5(alert.actionM);
+    const sub = alert.level === Level.URGENT ? `Brake to ${Math.round(alert.safeKmh)} km/h` : `Ease off to ${Math.round(alert.safeKmh)} km/h`;
+    if (act < 5) setInstruction("", "BRAKE NOW", sub, true);
+    else setInstruction("Curve in", act, sub);
+  } else if (hotspot) {
+    level = "hotspot";
+    setInstruction("Hotspot in", r5(actionDistanceM(hotspot.distanceM, speedKmh)), hotspot.name || "Known crash spot");
+  } else if (next && next.start_m <= alongM) {
+    setInstruction("", "In curve", `Hold ${Math.round(safeOf(next))} km/h or less`, true);
+  } else if (next) {
+    setInstruction("Curve in", r5(actionDistanceM(next.start_m - alongM, speedKmh)), "Speed OK");
   } else {
-    $("nextDist").textContent = "—";
-    $("nextSafe").textContent = "—";
+    setInstruction("", "Clear road", "No sharp curves ahead", true);
   }
-  let level = alert.level, text = "No sharp curves close";
-  if (alert.level === Level.URGENT) text = `SLOW DOWN to ${Math.round(alert.safeKmh)}`;
-  else if (alert.level === Level.CAUTION) text = `Curve in ${Math.round(alert.distanceM)} m: ease off`;
-  else if (hotspot) { level = "hotspot"; text = `Crash hotspot ahead: ${hotspot.name || ""}`; }
-  else if (next) text = "OK";
   document.body.dataset.level = level;
-  $("banner").textContent = text;
+}
+
+/** label: small caps line; main: a number of metres (shown huge) or a short word; sub: what to do. */
+function setInstruction(label, main, sub, isWord = false) {
+  $("instrLabel").textContent = label;
+  const el = $("instrMain");
+  el.classList.toggle("word", isWord);
+  if (isWord) el.textContent = main;
+  else el.innerHTML = `${Number(main)}<small>m</small>`;
+  $("instrSub").textContent = sub;
 }
 
 function setStatus(text, live = false) {
@@ -193,7 +213,7 @@ function stop() {
   ride = null; lastFix = null; lastLevel = Level.NONE;
   document.body.dataset.level = "none";
   $("speed").textContent = "--";
-  $("banner").textContent = "Stopped";
+  setInstruction("", "Stopped", "Tap Start to ride", true);
   setStatus("Ready");
   setRunning(false);
 }
@@ -231,7 +251,7 @@ async function demo() {
     if (urgentFor > 2) speed = Math.max(speed - 3 * 3.6 * TICK, 20);   // rider reacts and brakes
     else if (!inCurve && a.level === Level.NONE && speed < 65 && along > ride.curves.at(-1)?.end_m) speed += 1.5 * 3.6 * TICK;
     along += (speed / 3.6) * TICK;
-    if (along >= ride.cum.at(-1)) { stop(); $("banner").textContent = "Demo finished"; return; }
+    if (along >= ride.cum.at(-1)) { stop(); setInstruction("", "Demo done", "Tap Demo ride to replay", true); return; }
     onFix(pointAt(along), speed, null);
   }, TICK * 1000);
 }
@@ -270,5 +290,25 @@ $("settings").addEventListener("close", () => {
   saveSettings();
 });
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+// ---------- film mode (?film): driven frame by frame by the demo-video recorder ----------
+// Sounds are logged with simulation time instead of played, so the soundtrack can be built offline.
+if (new URLSearchParams(location.search).has("film")) {
+  const events = [];
+  let t = 0;
+  beeper.unlock = () => {};
+  beeper.play = (name) => { events.push({ t, type: "beep", name }); return 0; };
+  beeper.loop = (name) => { if (beeper.looping !== name) { beeper.looping = name; events.push({ t, type: "loop", name }); } };
+  beeper.stop = () => { if (beeper.looping) { events.push({ t, type: "stop", name: beeper.looping }); beeper.looping = null; } };
+  filmSpeak = (text, delayMs = 0) => events.push({ t: t + delayMs / 1000, type: "voice", text });
+  window.motoFilm = {
+    events,
+    load(data) { setRide(data); lastLevel = Level.NONE; setStatus("Live · demo road", true); setRunning(true); },
+    fix(simT, pos, speed) { t = simT; onFix(pos, speed, null); },
+    setWet(on) { wetOverride = on; renderWet(); },
+    setSound(mode, lang = "tl") { settings.soundMode = mode; settings.voiceLang = lang; },
+    reset() { ride = null; lastLevel = Level.NONE; cautionedCurve = null; announcedHotspots = new Set(); beeper.looping = null; document.body.dataset.level = "none"; },
+  };
+} else if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
 renderWet();

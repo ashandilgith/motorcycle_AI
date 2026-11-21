@@ -23,12 +23,20 @@ body[data-level="hotspot"] { background: #1d2a4a; }
 #status.live { color: var(--ok); border-color: var(--ok); }
 .icon { background: none; border: 0; color: var(--fg); font-size: 26px; padding: 4px 8px; }
 
-.hud { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; text-align: center; }
-.speed { font-variant-numeric: tabular-nums; line-height: .9; }
-.speed span { font-size: clamp(110px, 38vw, 220px); font-weight: 800; letter-spacing: -4px; }
-.speed small { display: block; color: var(--muted); font-size: 20px; margin-top: 6px; }
-.banner { font-size: 22px; font-weight: 600; min-height: 2.6em; max-width: 22ch; }
-body[data-level="urgent"] .banner { font-size: 30px; font-weight: 800; }
+.hud { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 18px; text-align: center; }
+/* The instruction is the biggest thing on screen: read it in one glance */
+.instruction { min-height: 15rem; display: grid; align-content: center; gap: 4px; }
+#instrLabel { font-size: clamp(22px, 7vw, 36px); font-weight: 800; letter-spacing: 2px; text-transform: uppercase; min-height: 1.2em; }
+#instrMain { font-size: clamp(88px, 30vw, 160px); font-weight: 900; line-height: .95; letter-spacing: -3px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#instrMain.word { font-size: clamp(48px, 15vw, 88px); letter-spacing: -1px; }
+#instrMain small { font-size: .45em; letter-spacing: 0; margin-left: 4px; }
+#instrSub { font-size: clamp(22px, 6.5vw, 34px); font-weight: 700; color: #e5e7eb; }
+body[data-level="none"] #instrMain { color: var(--ok); }
+
+.speed { font-variant-numeric: tabular-nums; line-height: .9; opacity: .85; }
+.speed span { font-size: clamp(56px, 20vw, 110px); font-weight: 800; letter-spacing: -2px; }
+.speed small { display: block; color: var(--muted); font-size: 16px; margin-top: 4px; }
+.react { margin: 0; color: var(--muted); font-size: 13px; }
 .next { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; max-width: 420px; }
 .next div { background: #151920cc; border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
 .next label { display: block; color: var(--muted); font-size: 13px; }

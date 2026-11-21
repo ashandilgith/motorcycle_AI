@@ -1,0 +1,249 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0b0d10;font-family:Inter,system-ui,sans-serif;color:#f4f6f8}
+  #left{position:absolute;left:0;top:0;width:960px;height:1080px}
+  #right{position:absolute;left:960px;top:0;width:960px;height:1080px;background:radial-gradient(120% 90% at 50% 40%,#1a2030 0%,#0b0d10 70%)}
+  .divider{position:absolute;left:958px;top:0;width:4px;height:1080px;background:#000}
+  .tag{position:absolute;top:34px;font-size:22px;letter-spacing:3px;text-transform:uppercase;color:#9aa4b2;font-weight:700}
+  #phone{position:absolute;left:50%;top:84px;transform:translateX(-50%);width:446px;height:922px;border-radius:64px;background:#05060a;box-shadow:0 0 0 3px #2a303b,0 30px 80px #000c;padding:18px}
+  #phone iframe{width:390px;height:844px;border:0;border-radius:46px;transform:scale(1.05);transform-origin:0 0;background:#0b0d10}
+  #mode{position:absolute;bottom:22px;left:0;right:0;text-align:center;font-size:24px;color:#cbd5e1}
+  #mode b{color:#fff}
+</style></head>
+<body>
+<canvas id="left" width="960" height="1080"></canvas>
+<div class="divider"></div>
+<div id="right">
+  <div class="tag" style="left:0;right:0;text-align:center">What the rider's phone shows</div>
+  <div id="phone"><iframe id="app" src="app/?film"></iframe></div>
+  <div id="mode"></div>
+</div>
+<script>
+const W = 960, H = 1080, S = 3.1, BX = 360, BY = 880;
+let TL = null, DEMO = null, cum = null, ride = null, rideKey = null, events = [];
+const cv = document.getElementById("left"), g = cv.getContext("2d");
+const app = () => document.getElementById("app").contentWindow.motoFilm;
+
+async function init() {
+  TL = await (await fetch("timeline.json")).json();
+  DEMO = await (await fetch("demo.json")).json();
+  cum = [0];
+  for (let i = 1; i < TL.road.length; i++) cum.push(cum[i-1] + Math.hypot(TL.road[i][0]-TL.road[i-1][0], TL.road[i][1]-TL.road[i-1][1]));
+  // deterministic grass tufts in world space
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  window.TUFTS = Array.from({length: 2600}, () => [rnd()*900-300, rnd()*900-250, rnd()]);
+  while (!app()) await new Promise(r => setTimeout(r, 50));
+  return true;
+}
+
+function startRide(key) {
+  rideKey = key; ride = TL.rides[key];
+  const a = app();
+  a.reset();
+  a.setSound(ride.sound, ride.lang);
+  a.load({...DEMO, conditions: {wet: ride.wet, night: false}});
+  a.setWet(false);
+  events = a.events; events.length = 0;
+  document.getElementById("mode").innerHTML = ride.sound === "beeps"
+    ? "Sound setting: <b>Beeps only</b> (default)"
+    : "Sound setting: <b>Beeps + voice</b> · road: <b>wet</b> (rain detected)";
+  return ride.frames.length;
+}
+
+function xyAt(along) {
+  let i = cum.findIndex(c => c >= along); if (i < 1) i = 1; if (i === -1) i = cum.length - 1;
+  const t = (along - cum[i-1]) / ((cum[i]-cum[i-1]) || 1);
+  return [TL.road[i-1][0] + t*(TL.road[i][0]-TL.road[i-1][0]), TL.road[i-1][1] + t*(TL.road[i][1]-TL.road[i-1][1])];
+}
+
+let cam;
+function P([wx, wy]) {
+  const dx = wx - cam.x, dy = wy - cam.y, h = cam.h;
+  const rx = dx*Math.cos(h) - dy*Math.sin(h), ry = dx*Math.sin(h) + dy*Math.cos(h);
+  return [BX + rx*S, BY - ry*S];
+}
+
+function pathAlong(a0, a1, step = 2) {
+  const out = []; for (let a = a0; a < a1; a += step) out.push(P(xyAt(a))); out.push(P(xyAt(a1))); return out;
+}
+function strokePts(pts, w, color, dash) {
+  g.beginPath(); pts.forEach(([x,y],k) => k ? g.lineTo(x,y) : g.moveTo(x,y));
+  g.lineWidth = w; g.strokeStyle = color; g.lineCap = "butt"; g.lineJoin = "round"; g.setLineDash(dash || []); g.stroke(); g.setLineDash([]);
+}
+
+function drawFrame(i) {
+  const f = ride.frames[i];
+  app().fix(f.t, [f.lat, f.lon], f.speed);
+  cam = {x: f.x, y: f.y, h: f.hdg * Math.PI / 180};
+  const wet = ride.wet;
+
+  // ground
+  g.fillStyle = wet ? "#16241b" : "#1d3a22"; g.fillRect(0, 0, W, H);
+  for (const [tx, ty, r] of TUFTS) {
+    const [sx, sy] = P([tx, ty]); if (sx < -10 || sx > W+10 || sy < -10 || sy > H+10) continue;
+    g.fillStyle = r > .5 ? (wet ? "#1c3023" : "#24472a") : (wet ? "#122017" : "#18321d");
+    g.fillRect(sx, sy, 6 + r*8, 3 + r*4);
+  }
+  // road
+  const all = TL.road.map(P);
+  // white edge lines = full width in white, then asphalt slightly narrower on top
+  strokePts(all, 10.5*S, "rgba(255,255,255,.85)");
+  strokePts(all, 9.9*S, wet ? "#2c3138" : "#40464f");
+  if (wet) strokePts(all, 6*S, "rgba(140,170,210,.08)");
+  // centre line
+  strokePts(all, 0.18*S*1.6, "#f5c518", [3*S, 3*S]);
+
+  // curve zone tint + label
+  const cz = pathAlong(DEMO.curves[0].start_m, DEMO.curves[0].end_m);
+  strokePts(cz, 9.9*S, "rgba(239,68,68,.16)");
+
+  // reaction + braking guide on the road ahead
+  const toCurve = DEMO.curves[0].start_m - f.along;
+  if (toCurve > 0 && toCurve < 330) {
+    const react = Math.min(f.react_m, toCurve);
+    strokePts(pathAlong(f.along + 2, f.along + react), 2.6*S, "rgba(250,204,21,.75)");
+    if (toCurve > react) strokePts(pathAlong(f.along + react, DEMO.curves[0].start_m), 2.6*S, f.level === "urgent" ? "rgba(239,68,68,.85)" : f.level === "caution" ? "rgba(245,165,36,.85)" : "rgba(34,197,94,.75)");
+    const [sx, sy] = P(xyAt(DEMO.curves[0].start_m));
+    g.fillStyle = "#fff"; g.fillRect(sx - 4.5*S, sy - 2, 9*S, 4);
+  }
+
+  // hotspot
+  const [hx, hy] = P(TL.hotspot.xy);
+  g.beginPath(); g.arc(hx, hy, 18*S, 0, 7); g.fillStyle = "rgba(59,130,246,.18)"; g.fill();
+  g.lineWidth = 3; g.strokeStyle = "rgba(96,165,250,.9)"; g.setLineDash([10, 8]); g.stroke(); g.setLineDash([]);
+  label(hx, hy - 18*S - 16, "Crash hotspot", "#93c5fd", 22);
+
+  // curve warning sign (upright on screen), 8 m right of the road
+  const sh = TL.curve.sign_hdg * Math.PI/180;
+  const sp = P([TL.curve.sign_xy[0] - 13*Math.cos(sh), TL.curve.sign_xy[1] + 13*Math.sin(sh)]);  // left verge, away from the inside of the bend
+  sign(sp[0], sp[1]);
+  const ap = P(TL.curve.apex_xy);
+  label(ap[0] - 90, ap[1] + 60, `Safe ${Math.round(wet ? DEMO.curves[0].safe_kmh_wet : DEMO.curves[0].safe_kmh_dry)} km/h`, "#fecaca", 24);
+
+  // bike (always pointing up)
+  bike(f.braking);
+
+  // rain
+  if (wet) {
+    g.strokeStyle = "rgba(190,210,235,.35)"; g.lineWidth = 2;
+    let s = 99 + i*7; const r = () => (s = (s * 48271) % 2147483647) / 2147483647;
+    g.beginPath();
+    for (let k = 0; k < 220; k++) { const x = r()*W, y = r()*H; g.moveTo(x, y); g.lineTo(x - 8, y + 26); }
+    g.stroke();
+  }
+
+  overlays(f, i);
+}
+
+function sign(x, y) {
+  g.save(); g.translate(x, y); g.scale(.85, .85);
+  g.fillStyle = "#3b3b3b"; g.fillRect(-3, 0, 6, 46);
+  g.rotate(Math.PI/4); g.fillStyle = "#facc15"; g.fillRect(-30, -30, 60, 60); g.lineWidth = 4; g.strokeStyle = "#111"; g.strokeRect(-26, -26, 52, 52);
+  g.rotate(-Math.PI/4);
+  g.strokeStyle = "#111"; g.lineWidth = 6; g.lineCap = "round"; g.beginPath(); g.moveTo(-10, 18); g.lineTo(-10, -2); g.quadraticCurveTo(-10, -12, 4, -12); g.lineTo(12, -12); g.stroke();
+  g.fillStyle = "#111"; g.beginPath(); g.moveTo(18, -12); g.lineTo(6, -22); g.lineTo(6, -2); g.fill();
+  g.restore();
+}
+
+function bike(braking) {
+  g.save(); g.translate(BX, BY);
+  // headlight beam
+  const beam = g.createLinearGradient(0, 0, 0, -260);
+  beam.addColorStop(0, "rgba(255,250,220,.35)"); beam.addColorStop(1, "rgba(255,250,220,0)");
+  g.fillStyle = beam; g.beginPath(); g.moveTo(-8, -40); g.lineTo(-70, -260); g.lineTo(70, -260); g.lineTo(8, -40); g.fill();
+  if (braking) { const r = g.createRadialGradient(0, 46, 2, 0, 46, 44); r.addColorStop(0, "rgba(255,40,40,.95)"); r.addColorStop(1, "rgba(255,40,40,0)"); g.fillStyle = r; g.beginPath(); g.arc(0, 46, 44, 0, 7); g.fill(); }
+  // wheels
+  g.fillStyle = "#111"; rr(-7, -46, 14, 26, 6); rr(-7, 22, 14, 28, 6);
+  // body
+  g.fillStyle = "#e11d48"; rr(-17, -28, 34, 62, 14);
+  g.fillStyle = "#0f172a"; rr(-26, -30, 52, 9, 4); // handlebar
+  // rider
+  g.fillStyle = "#1e293b"; rr(-21, -6, 42, 34, 14);
+  g.fillStyle = "#f8fafc"; g.beginPath(); g.arc(0, -4, 15, 0, 7); g.fill();
+  g.fillStyle = "#111827"; g.beginPath(); g.arc(0, -10, 10, Math.PI, 0); g.fill();
+  g.restore();
+}
+function rr(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); g.fill(); }
+function label(x, y, text, color, size) {
+  g.font = `700 ${size}px Inter`; const w = g.measureText(text).width;
+  x = Math.max(w/2 + 16, Math.min(W - w/2 - 16, x));
+  g.fillStyle = "rgba(0,0,0,.55)"; g.beginPath(); g.roundRect(x - w/2 - 10, y - size, w + 20, size + 12, 8); g.fill();
+  g.fillStyle = color; g.textAlign = "center"; g.fillText(text, x, y); g.textAlign = "left";
+}
+
+// --- sound state from the app's logged events ---
+function soundState(t) {
+  let loop = null, lastBeep = null, lastVoice = null;
+  for (const e of events) {
+    if (e.t > t + 1e-6) break;
+    if (e.type === "loop") loop = e.name;
+    if (e.type === "stop") loop = null;
+    if (e.type === "beep") lastBeep = e;
+    if (e.type === "voice") lastVoice = e;
+  }
+  return {loop, beep: lastBeep && t - lastBeep.t < 0.9 ? lastBeep : null, voice: lastVoice && t - lastVoice.t < 3.2 ? lastVoice : null};
+}
+
+function caption(f, snd) {
+  if (snd.loop === "urgent") return f.braking ? ["Rider brakes after 1.5 s reaction", "Beeps keep going until the speed is safe"] : ["Still too fast: rapid beeps", "Repeats until you slow down"];
+  if (snd.beep?.name === "hotspot") return ["Known crash spot ahead", "One low tone"];
+  if (f.level === "caution") return ride.sound === "beeps" ? ["Too fast for the curve ahead", "2 warning beeps"] : ["Wet road: safe speed drops to 28", "2 beeps + voice"];
+  if (f.phase === "curve") return ["Through the curve at a safe speed", "Silence = you're OK"];
+  if (f.phase === "exit") return ["Curve done", ""];
+  return ride.wet ? ["Raining: wet-road speeds on", "Curve hidden behind the trees, " + Math.round(f.map_m) + " m"] : ["Blind curve ahead, " + Math.round(f.map_m) + " m away", "Rider at " + Math.round(f.speed) + " km/h"];
+}
+
+function overlays(f, i) {
+  const snd = soundState(f.t);
+  // top caption
+  const [c1, c2] = caption(f, snd);
+  const grad = g.createLinearGradient(0, 0, 0, 190); grad.addColorStop(0, "rgba(0,0,0,.85)"); grad.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = grad; g.fillRect(0, 0, W, 200);
+  g.fillStyle = "#9aa4b2"; g.font = "700 22px Inter"; g.fillText((rideKey === "A" ? "RIDE 1 · DRY ROAD" : "RIDE 2 · RAIN"), 40, 56);
+  g.fillStyle = "#fff"; g.font = "800 44px Inter"; g.fillText(c1, 40, 112);
+  g.fillStyle = "#cbd5e1"; g.font = "600 28px Inter"; g.fillText(c2, 40, 154);
+
+  // bottom HUD: speed + distances
+  g.fillStyle = "rgba(0,0,0,.6)"; g.beginPath(); g.roundRect(30, H - 150, 300, 120, 18); g.fill();
+  g.fillStyle = f.braking ? "#fca5a5" : "#fff"; g.font = "800 64px Inter"; g.fillText(Math.round(f.speed), 52, H - 70);
+  g.fillStyle = "#9aa4b2"; g.font = "600 22px Inter"; g.fillText("km/h" + (f.braking ? " · braking" : ""), 52, H - 40);
+  if (f.map_m > 0 && f.map_m < 330) {
+    g.fillStyle = "rgba(0,0,0,.6)"; g.beginPath(); g.roundRect(W - 390, H - 150, 360, 120, 18); g.fill();
+    g.font = "600 24px Inter";
+    g.fillStyle = "#facc15"; g.fillText(`■ Reaction 1.5 s: ${Math.round(f.react_m)} m`, W - 370, H - 106);
+    g.fillStyle = "#e5e7eb"; g.fillText(`■ Left to brake: ${Math.max(0, Math.round(f.map_m - f.react_m))} m`, W - 370, H - 70);
+    g.fillStyle = "#9aa4b2"; g.font = "500 20px Inter"; g.fillText(`Map distance ${Math.round(f.map_m)} m`, W - 370, H - 40);
+  }
+
+  // sound indicator
+  let txt = null, col = "#fff";
+  if (snd.loop === "urgent") { txt = (Math.floor(f.t * 6) % 2 ? "BEEP BEEP BEEP" : "BEEP BEEP BEEP"); col = "#fecaca"; }
+  else if (snd.beep?.name === "caution") { txt = "beep · beep"; col = "#fde68a"; }
+  else if (snd.beep?.name === "hotspot") { txt = "booop"; col = "#bfdbfe"; }
+  if (txt) {
+    const pulse = snd.loop ? 1 + 0.06 * Math.sin(f.t * 40) : 1;
+    g.save(); g.translate(W/2, 300); g.scale(pulse, pulse);
+    g.font = "900 54px Inter"; const w = g.measureText(txt).width;
+    g.fillStyle = "rgba(0,0,0,.6)"; g.beginPath(); g.roundRect(-w/2 - 70, -50, w + 110, 74, 37); g.fill();
+    speaker(-w/2 - 40, -13, col);
+    g.fillStyle = col; g.textAlign = "center"; g.fillText(txt, 20, 6); g.textAlign = "left";
+    g.restore();
+  }
+  if (snd.voice) {
+    const text = "“" + snd.voice.text + "”";
+    g.font = "700 30px Inter"; const w = Math.min(g.measureText(text).width, 820);
+    const y = txt ? 400 : 320;
+    g.fillStyle = "rgba(255,255,255,.95)"; g.beginPath(); g.roundRect(W/2 - w/2 - 26, y - 44, w + 52, 66, 20); g.fill();
+    g.beginPath(); g.moveTo(W/2 - 12, y + 22); g.lineTo(W/2 + 12, y + 22); g.lineTo(W/2, y + 40); g.fill();
+    g.fillStyle = "#0f172a"; g.textAlign = "center"; g.fillText(text, W/2, y); g.textAlign = "left";
+  }
+}
+function speaker(x, y, col) {
+  g.fillStyle = col; g.beginPath(); g.moveTo(x - 18, y - 9); g.lineTo(x - 8, y - 9); g.lineTo(x + 4, y - 20); g.lineTo(x + 4, y + 20); g.lineTo(x - 8, y + 9); g.lineTo(x - 18, y + 9); g.fill();
+  g.strokeStyle = col; g.lineWidth = 4; g.beginPath(); g.arc(x + 6, y, 14, -0.8, 0.8); g.stroke(); g.beginPath(); g.arc(x + 6, y, 24, -0.8, 0.8); g.stroke();
+}
+
+window.film = { init, startRide, drawFrame, events: () => events };
+</script>
+</body></html>

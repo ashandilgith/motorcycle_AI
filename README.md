@@ -28,6 +28,7 @@ The curve check runs **on the phone**. The server only computes the curves once 
 
 The MVP phone app is a **mobile web app (PWA)** in `web/`. The backend serves it at `/app/`. Open it in Chrome on Android and choose **Add to Home screen**, and it runs full-screen like an app.
 
+- **The instruction is the biggest text:** a small "CURVE IN" label above a huge **"35 m"**. That distance is **what's left after your 1.5 s reaction time** at your current speed. At 65 km/h, a curve 61 m away on the map shows as 35 m. The raw map distance is shown smaller underneath.
 - **Beeps by default.** You're too fast for a curve ahead: two short beeps first, then **rapid, sharp, high-pitched beeps that keep repeating until you're at a safe speed**. A crash hotspot gets one long low tone. The screen also turns amber, then flashing red.
 - **Voice is an option.** In Settings, choose *Beeps + voice* or *Voice only*, in Taglish or English.
 - **Demo ride** plays a simulated ride into a sharp curve, so you can hear the alerts at your desk. **Test beeps** plays the sounds.
@@ -49,6 +50,8 @@ For real use, deploy the backend anywhere with HTTPS (Render, Fly.io, Cloud Run)
 
 1. **Fast:** wrap this PWA as a Trusted Web Activity with [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap). You get a Play Store APK with the same code, but the same foreground-only limit.
 2. **Full:** a native or Flutter app with a foreground location service, so alerts work with the screen off. Port `web/js/alert.js`; it's ~100 lines, and `backend/tests/test_js_parity.py` shows how to check a port against Python.
+
+**Demo video:** `demo_video/` renders a split-screen video (animated ride + the real app + its beeps and voice). See its README.
 
 ## Quick start
 

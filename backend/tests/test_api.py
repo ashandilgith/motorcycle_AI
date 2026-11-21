@@ -34,7 +34,7 @@ def test_curves_and_alert_endpoints():
     assert curves["count"] == 1
     r = c.post("/ride/alert", json={"points": pts, "position": offset(ORIGIN, 0, 260), "speed_kmh": 70}).json()
     assert r["level"] == "urgent"
-    assert r["message_tl"].startswith("Paps")
+    assert r["message_tl"] and r["action_distance_m"] < r["distance_to_curve_m"]
 
 
 def test_sound_baseline_then_check():

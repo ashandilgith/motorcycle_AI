@@ -51,6 +51,11 @@ export function distanceAlong(route, cum, position) {
   return best;
 }
 
+/** Distance left to the curve once the rider has reacted (REACTION_S at current speed). This is what we show. */
+export function actionDistanceM(distanceM, speedKmh) {
+  return Math.max(0, distanceM - (speedKmh / 3.6) * REACTION_S);
+}
+
 export function requiredDistanceM(speedKmh, targetKmh) {
   const v = speedKmh / 3.6, vt = targetKmh / 3.6;
   if (v <= vt) return 0;
@@ -74,11 +79,12 @@ export function evaluate(positionM, speedKmh, curves, { wet = false, night = fal
     else if (d <= need * CAUTION_FACTOR) level = Level.CAUTION;
     else continue;
     if (RANK[level] > RANK[worst.level]) {
-      const r10 = Math.round(d / 10) * 10;
+      const act = actionDistanceM(d, speedKmh);
+      const r5 = Math.round(act / 5) * 5;
       worst = {
-        level, curve: c, distanceM: d, speedKmh, safeKmh: safe,
-        messageTl: `Paps, matalim na kurba ${r10} metro${wet ? ", basa ang kalsada" : ""}. Bagalan sa ${Math.round(safe)}.`,
-        messageEn: `Sharp curve in ${r10} m${wet ? " on a wet road" : ""}. Slow to ${Math.round(safe)} km/h.`,
+        level, curve: c, distanceM: d, actionM: act, speedKmh, safeKmh: safe,
+        messageTl: act < 5 ? `Preno na! Bagalan sa ${Math.round(safe)}.` : `Kurba in ${r5} metro${wet ? ", basa ang kalsada" : ""}. Bagalan sa ${Math.round(safe)}.`,
+        messageEn: act < 5 ? `Brake now! Slow to ${Math.round(safe)}.` : `Curve in ${r5} metres${wet ? " on a wet road" : ""}. Slow to ${Math.round(safe)}.`,
       };
     }
   }
@@ -92,7 +98,7 @@ export function hotspotAhead(positionM, hotspots) {
     if (d >= 0 && d <= HOTSPOT_WARN_M) {
       const r10 = Math.round(d / 10) * 10;
       const name = h.name || "crash hotspot";
-      return { ...h, distanceM: Math.round(d), messageTl: `Paps, delikadong lugar sa unahan, ${r10} metro: ${name}. Ingat.`, messageEn: `Crash hotspot in ${r10} m: ${name}. Take care.` };
+      return { ...h, distanceM: Math.round(d), messageTl: `Paps, delikadong lugar sa unahan, ${r10} metro: ${name}. Ingat.`, messageEn: `Crash hotspot in ${r10} metres: ${name}. Take care.` };
     }
   }
   return null;

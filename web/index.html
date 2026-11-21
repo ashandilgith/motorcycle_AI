@@ -18,12 +18,17 @@
   </header>
 
   <main class="hud">
-    <div class="speed"><span id="speed">--</span><small>km/h</small></div>
-    <div id="banner" class="banner">Tap Start, then mount the phone</div>
-    <div class="next">
-      <div><label>Next curve</label><b id="nextDist">—</b></div>
-      <div><label>Safe speed</label><b id="nextSafe">—</b></div>
+    <div class="instruction">
+      <div id="instrLabel"></div>
+      <div id="instrMain" class="word">Ready</div>
+      <div id="instrSub">Tap Start, then mount the phone</div>
     </div>
+    <div class="speed"><span id="speed">--</span><small>km/h now</small></div>
+    <div class="next">
+      <div><label>Safe in curve</label><b id="nextSafe">—</b></div>
+      <div><label>Map distance</label><b id="nextDist">—</b></div>
+    </div>
+    <p class="react">Curve distance = what's left after 1.5 s reaction</p>
   </main>
 
   <footer class="actions">
