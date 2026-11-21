@@ -1,7 +1,6 @@
-# Mobile app (to build)
+# Native mobile app (later)
 
-Not started yet. Planned: Flutter (one codebase for Android first, iOS later).
-Most Manila riders are on Android, so start there.
+The MVP phone app is the PWA in `../web/`. A native or Flutter Android app comes later, so alerts can keep working with the screen off (a foreground location service). Most Manila riders are on Android, so start there.
 
 ## What the phone does
 
@@ -14,7 +13,7 @@ Most Manila riders are on Android, so start there.
 
 ## Curve-speed loop contract
 
-Port `backend/app/curves/geometry.py` (`distance_along`) and `backend/app/curves/alert.py` (`evaluate`) as they are. Both are pure functions.
+Port `web/js/alert.js` (itself a port of `backend/app/curves/{geometry,alert}.py`). Check it against Python the way `backend/tests/test_js_parity.py` does. Sounds: `web/js/beeper.js` (urgent = 2.4 kHz square-wave triple beeps, repeated every 450 ms until speed is safe).
 
 1. When a ride starts, call `POST /ride/start {position, heading_deg, destination?}`. Cache `points`, `curves`, `hotspots` and `conditions`.
 2. On each GPS fix (`speed`, `lat`, `lon`):

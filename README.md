@@ -13,7 +13,7 @@ This is the MVP skeleton: a Python backend with three features. Each one works e
 ## Architecture
 
 ```
-Phone (to build, see mobile/)       Backend (FastAPI, Python)            Services
+Phone (web/ PWA; Android later)     Backend (FastAPI, Python)            Services
 ─────────────────────────────       ─────────────────────────            ────────
 Ride-risk loop  <── /ride/start ─── Curve pre-processor  <────────────── Google Routes API / OSM Overpass,
                                     + hotspots                           Open-Meteo, hotspots.geojson
@@ -24,15 +24,41 @@ Chat + voice    ── text ──────────> LLM agent + tools   
 
 The curve check runs **on the phone**. The server only computes the curves once per route.
 
+## Use it on your phone (MVP)
+
+The MVP phone app is a **mobile web app (PWA)** in `web/`. The backend serves it at `/app/`. Open it in Chrome on Android and choose **Add to Home screen**, and it runs full-screen like an app.
+
+- **Beeps by default.** You're too fast for a curve ahead: two short beeps first, then **rapid, sharp, high-pitched beeps that keep repeating until you're at a safe speed**. A crash hotspot gets one long low tone. The screen also turns amber, then flashing red.
+- **Voice is an option.** In Settings, choose *Beeps + voice* or *Voice only*, in Taglish or English.
+- **Demo ride** plays a simulated ride into a sharp curve, so you can hear the alerts at your desk. **Test beeps** plays the sounds.
+- **Wet / Dry** chip: switches to wet-road safe speeds yourself. It also turns on automatically when it's raining.
+
+**GPS needs HTTPS** on a phone (the browser blocks location on plain http, except on localhost). The quickest test is a tunnel:
+
+```bash
+cd backend && uvicorn app.main:app --port 8000
+cloudflared tunnel --url http://localhost:8000     # or: ngrok http 8000
+# open https://<random>.trycloudflare.com/app/ on the phone
+```
+
+For real use, deploy the backend anywhere with HTTPS (Render, Fly.io, Cloud Run).
+
+**Limits of a web app:** the screen has to stay on and the app has to stay open; the app keeps the screen awake itself. That's fine for a handlebar-mounted phone. For alerts with the screen off or the app in the background, ship the Android app (below).
+
+### Path to an Android app
+
+1. **Fast:** wrap this PWA as a Trusted Web Activity with [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap). You get a Play Store APK with the same code, but the same foreground-only limit.
+2. **Full:** a native or Flutter app with a foreground location service, so alerts work with the screen off. Port `web/js/alert.js`; it's ~100 lines, and `backend/tests/test_js_parity.py` shows how to check a port against Python.
+
 ## Quick start
 
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m pytest -q                    # 33 tests, no API keys or network needed
+python -m pytest -q                    # 34 tests, no API keys or network needed
 python -m tools.simulate_ride --wet    # replay a ride, see/hear the alerts
-uvicorn app.main:app --reload          # API docs at http://localhost:8000/docs
+uvicorn app.main:app --reload          # app: http://localhost:8000/app/  ·  API docs: /docs
 ```
 
 Optional keys (see `.env.example`): `ANTHROPIC_API_KEY` for the assistant and tyre check, and `GOOGLE_MAPS_API_KEY` for planned routes, GPS snapping and shop search. Without them, those endpoints return 503. Everything else works. `/ride/start` falls back to OpenStreetMap when there's no Google key.
@@ -58,6 +84,8 @@ Every external call goes through `app/integrations/http.py`, so tests swap in a 
 | POST | `/bikes` | Register a bike (make, model, year, odometer, usage: commuter/gig/diy) |
 | POST | `/bikes/{id}/service` | Log a service (e.g. `engine_oil` at 5,200 km) |
 | GET | `/bikes/{id}/maintenance` | What's overdue or due soon |
+| GET | `/app/` | The phone app |
+| GET | `/demo/ride` | Synthetic road for the demo ride |
 | POST | `/ride/start` | **Main call for the phone**: route (Google) or road ahead (OSM) + curves + weather + hotspots |
 | POST | `/routes/curves` | Google route → curves with safe dry/wet speeds |
 | POST | `/routes/curves/from-points` | Same, for your own polyline (no key needed) |
@@ -80,7 +108,7 @@ Every external call goes through `app/integrations/http.py`, so tests swap in a 
 
 ## Not done yet (by design)
 
-- [ ] Phone app (see `mobile/README.md`)
+- [ ] Android app with background alerts (see "Path to an Android app")
 - [ ] Replace the placeholder intervals in `maintenance.py` with figures from each model's owner's manual
 - [ ] Self-hosted Overpass or pre-extracted Metro Manila roads (the public Overpass server is rate-limited)
 - [ ] Fill `hotspots.geojson` from MMDA/LGU crash data

@@ -6,15 +6,19 @@ Docs: http://localhost:8000/docs
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import settings
 from .curves import alert as alert_mod
 from .curves.geometry import distance_along, find_curves
-from .integrations import google_maps, weather
+from .demo import ORIGIN, offset, road_with_curve
+from .integrations import google_maps, hotspots, weather
 from .ride import start_ride
 from .llm import assistant, vision
 from .maintenance import next_due
@@ -23,6 +27,7 @@ from .sound.features import embed, read_wav
 from .storage import Store
 
 LatLonIn = tuple[float, float]
+WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 
 # ---------- request models ----------
@@ -87,6 +92,26 @@ def create_app(db_path: str | None = None) -> FastAPI:
         if not bike:
             raise HTTPException(404, "bike not found")
         return bike
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse("/app/")
+
+    @app.get("/demo/ride")
+    def demo_ride():
+        """A synthetic road (300 m straight into a 40 m-radius curve) for trying alerts without riding."""
+        pts, cum, curves = find_curves(road_with_curve(radius_m=40))
+        exit_spot = offset(ORIGIN, 40 + 120, 340)  # on the exit straight, 120 m after the curve
+        hs = hotspots.along_route(pts, cum, [{"name": "Demo intersection", "lat": exit_spot[0], "lon": exit_spot[1]}])
+        return {
+            "source": "demo",
+            "points": pts,
+            "length_m": round(cum[-1], 1),
+            "curves": [asdict(c) for c in curves],
+            "hotspots": hs,
+            "conditions": {"wet": False, "night": False},
+            "warnings": [],
+        }
 
     @app.get("/health")
     def health():
@@ -210,6 +235,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(503, str(exc))
 
+    if WEB_DIR.exists():  # the phone app (PWA)
+        app.mount("/app", StaticFiles(directory=WEB_DIR, html=True), name="web")
     return app
 
 
