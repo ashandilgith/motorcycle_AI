@@ -1,0 +1,73 @@
+# Road data for the whole region in one go: Metro Manila, Rizal, Cavite, Laguna, Bulacan, Batangas.
+# Monthly (fresh OpenStreetMap roads) or on demand: Actions > "Build region road data" > Run workflow.
+# The tiles go into a GitHub release file (not the code), and backend/data/region_tiles.json points
+# to it; committing that file makes Render redeploy, and the Docker build downloads the tiles.
+name: Build region road data
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 19 2 * *"   # 2nd of each month, 03:17 Manila time
+
+permissions:
+  contents: write
+
+concurrency: road-tiles
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REGION: luzon-south
+      BBOX: "13.50,120.55,15.25,121.75"   # south,west,north,east (same as tiles_from_pbf.REGIONS)
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt && sudo apt-get update -q && sudo apt-get install -yq osmium-tool
+      - name: Download Philippines extract (Geofabrik) and cut out the region
+        run: |
+          curl -fsSL --retry 3 -o /tmp/ph.osm.pbf https://download.geofabrik.de/asia/philippines-latest.osm.pbf
+          IFS=, read s w n e <<< "$BBOX"
+          osmium extract -b "$w,$s,$e,$n" --strategy smart -o /tmp/region.osm.pbf /tmp/ph.osm.pbf
+          ls -lh /tmp/*.pbf
+      - name: Build tiles
+        working-directory: backend
+        env:
+          OSM_TILE_DIR: /tmp/region_tiles
+        run: |
+          python -m tools.tiles_from_pbf --pbf /tmp/region.osm.pbf --region "$REGION" --skip-service
+          du -sh /tmp/region_tiles
+      - name: Publish as a release file and point the app at it
+        run: |
+          stamp=$(date -u +%Y%m%d-%H%M)
+          name="region_tiles-$stamp.tar"
+          tar -cf "/tmp/$name" -C /tmp/region_tiles .
+          gh release view road-data >/dev/null 2>&1 || gh release create road-data --title "Road data" --notes "Road tiles built from OpenStreetMap (Geofabrik extract), © OpenStreetMap contributors, ODbL. Used by the app at build time."
+          gh release upload road-data "/tmp/$name"
+          # keep the newest 3 files
+          gh release view road-data --json assets --jq '.assets[].name' | grep '^region_tiles-' | sort | head -n -3 | while read old; do gh release delete-asset road-data "$old" -y; done
+          tiles=$(ls /tmp/region_tiles | wc -l)
+          python - "$name" "$tiles" <<'PY'
+          import hashlib, json, os, sys, datetime
+          name, tiles = sys.argv[1], int(sys.argv[2])
+          path = f"/tmp/{name}"
+          json.dump({
+              "url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/road-data/{name}",
+              "sha256": hashlib.sha256(open(path, "rb").read()).hexdigest(),
+              "bytes": os.path.getsize(path),
+              "tiles": tiles,
+              "bbox": os.environ["BBOX"],
+              "built": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+              "source": "OpenStreetMap via Geofabrik philippines-latest.osm.pbf, (c) OpenStreetMap contributors, ODbL",
+          }, open("backend/data/region_tiles.json", "w"), indent=2)
+          PY
+          cat backend/data/region_tiles.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/data/region_tiles.json
+          git commit -m "Region road data $stamp ($tiles tiles)"
+          git pull --rebase
+          git push

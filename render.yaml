@@ -20,6 +20,8 @@ services:
         value: DRIVE
       - key: LLM_MODEL
         value: claude-sonnet-5-5
+      - key: OVERPASS_LIVE      # public map servers don't answer Render; phones fetch roads instead
+        value: "0"
     # Paid plan with a persistent database: set `plan: starter` and uncomment:
     # disk:
     #   name: data

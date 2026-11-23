@@ -2,6 +2,7 @@
 import { Level, actionDistanceM, cumulative, distanceAlong, evaluate, hotspotAhead } from "./alert.js";
 import { Beeper, speak } from "./beeper.js";
 import { initGarage } from "./garage.js";
+import { cachedRoadsNear, roadsNear } from "./roads.js";
 
 // Report our own JavaScript errors to the server log (no personal data, just the error).
 const APP_VERSION = "0.2.0";
@@ -50,6 +51,12 @@ let lastLevel = Level.NONE, cautionedCurve = null, announcedHotspots = new Set()
 let fixes = [], startedAt = 0, lastGoodFixAt = 0, gpsTimer = null, heldAlert = null, lowerCount = 0, liveStatus = "";
 
 // ---------- backend ----------
+async function postRide(body) {
+  const r = await fetch(`${API}/ride/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
 async function fetchRide(position, heading) {
   if (fetching || Date.now() - lastFetch < MIN_REFETCH_MS) return;
   fetching = true; lastFetch = Date.now();
@@ -58,9 +65,17 @@ async function fetchRide(position, heading) {
     const body = { position, heading_deg: heading ?? null };
     const dest = parseLatLon(settings.destination);
     if (dest) body.destination = dest;
-    const r = await fetch(`${API}/ride/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    setRide(await r.json());
+    // roads we fetched ourselves earlier for this area (the server uses its own if it has them)
+    const near = dest ? null : cachedRoadsNear(position);
+    if (near) body.roads = near;
+    let data = await postRide(body);
+    if (data.need_roads) {
+      // server has no road data here: get it from OpenStreetMap on the phone, then ask again
+      setStatus("Loading road from map…");
+      body.roads = await roadsNear(position);
+      data = await postRide(body);
+    }
+    setRide(data);
     const tags = shortWarnings(ride.warnings || []);
     liveStatus = `Live · ${ride.curves.length} curves${tags ? " · " + tags : ""}`;
     setStatus(liveStatus, !tags.includes("no road"));

@@ -60,13 +60,10 @@ For real use, deploy the backend anywhere with HTTPS (Render, Fly.io, Cloud Run)
 
 1. **Host:** push to GitHub, then on [Render](https://render.com) choose **New → Blueprint** and pick this repo. `render.yaml` sets up a Docker web service in Singapore with HTTPS, a health check and a 1 GB disk for the database. Any Docker host works (`Dockerfile`); keep `/data` on a persistent disk.
 2. **Keys:** in the host's dashboard, set `GOOGLE_MAPS_API_KEY` (enable Routes, Roads, Places API (New)) and `ANTHROPIC_API_KEY`. Never commit them.
-3. **Road data:** fill the tile cache for your test areas, so rides don't wait on the slow public OpenStreetMap servers:
-   ```bash
-   cd backend
-   python -m tools.prewarm_osm --around 14.6240,121.2064 --km 3     # e.g. Marcos Highway, Antipolo
-   python -m tools.prewarm_osm --gpx my_route.gpx --km 1            # along a recorded route
-   ```
-   Tiles land in `backend/data/osm_tiles/`. Commit them or copy them to the server.
+3. **Road data** (for riding without a destination). Nothing to do per road:
+   - **Region:** the "Build region road data" GitHub workflow builds every road in Metro Manila, Rizal, Cavite, Laguna, Bulacan and Batangas from the OpenStreetMap extract, monthly (or Actions → Run workflow). It stores them as a release file and updates `backend/data/region_tiles.json`; Render redeploys and the Docker build downloads them (`backend/tools/fetch_region_tiles.py`). To cover more, widen `REGIONS` in `backend/tools/tiles_from_pbf.py` and `BBOX` in the workflow.
+   - **Anywhere else:** the server answers `need_roads: true` straight away, the phone downloads the roads around it from OpenStreetMap itself (`web/js/roads.js`, 1.5 km circle, reused while the rider stays within 500 m of where it was fetched) and sends them with the ride request. Slower (the public map servers can take 10–30 s) and needs mobile data, but works everywhere. `OVERPASS_LIVE=0` (set in `render.yaml`) stops the server trying those servers itself; they don't answer Render.
+   - Small extra areas without waiting a month: "Build road tiles" workflow with a box, or `python -m tools.prewarm_osm --around 14.6240,121.2064 --km 3`.
 4. **Phone:** open `https://<your-app>.onrender.com/app/` in Chrome on Android, then **Add to Home screen**.
 5. **Fill in** `[operator name]` and the contact emails in `web/privacy.html` and `web/terms.html`, and have a lawyer review both before a public launch.
 

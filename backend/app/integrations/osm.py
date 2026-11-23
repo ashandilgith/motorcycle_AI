@@ -31,11 +31,18 @@ OVERPASS_TIMEOUT_S = 12
 # Tile cache: 0.01 degree squares (~1.1 km) of road data, gzipped JSON on disk.
 TILE_DEG = 0.01
 TILE_DIR = Path(os.getenv("OSM_TILE_DIR", Path(__file__).resolve().parents[2] / "data" / "osm_tiles"))
-TILE_MAX_AGE_S = 60 * 24 * 3600  # roads change slowly; refresh tiles every ~2 months
+TILE_MAX_AGE_S = 60 * 24 * 3600  # prewarm script refreshes tiles older than this; old tiles are still served
+# Live Overpass from the server. Off on Render: the public servers don't answer its IPs, so the
+# phone fetches the roads itself instead (see ride.start_ride and web/js/roads.js).
+OVERPASS_LIVE = os.getenv("OVERPASS_LIVE", "1") not in ("0", "false", "no")
 ROAD_TYPES = (
     "trunk|primary|secondary|tertiary|unclassified|residential|living_street|service"
     "|trunk_link|primary_link|secondary_link|tertiary_link"
 )
+
+
+class NoRoadData(RuntimeError):
+    """Server has no roads here and won't ask Overpass: the phone should send them."""
 
 
 @dataclass
@@ -46,18 +53,31 @@ class RoadGraph:
 
 
 def parse_overpass(data: dict) -> RoadGraph:
+    """Road graph from Overpass-style elements. Tolerates junk (elements can come from a phone)."""
     nodes: dict[int, LatLon] = {}
     adj: dict[int, set[int]] = {}
     oneway: set[tuple[int, int]] = set()
-    for el in data.get("elements", []):
-        if el["type"] == "node":
-            nodes[el["id"]] = (el["lat"], el["lon"])
-    for el in data.get("elements", []):
-        if el["type"] != "way":
+    elements = data.get("elements", [])
+    for el in elements:
+        try:
+            if el["type"] == "node":
+                lat, lon = float(el["lat"]), float(el["lon"])
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    nodes[int(el["id"])] = (lat, lon)
+        except (KeyError, TypeError, ValueError):
             continue
-        ids = [n for n in el.get("nodes", []) if n in nodes]
-        is_oneway = el.get("tags", {}).get("oneway") in ("yes", "1", "true")
+    for el in elements:
+        if not isinstance(el, dict) or el.get("type") != "way":
+            continue
+        try:
+            ids = [int(n) for n in el.get("nodes", []) if int(n) in nodes]
+        except (TypeError, ValueError):
+            continue
+        tags = el.get("tags") or {}
+        is_oneway = isinstance(tags, dict) and tags.get("oneway") in ("yes", "1", "true")
         for a, b in zip(ids, ids[1:]):
+            if a == b:
+                continue
             adj.setdefault(a, set()).add(b)
             adj.setdefault(b, set()).add(a)
             if is_oneway:
@@ -82,19 +102,62 @@ def _tile_path(t: tuple[int, int]) -> Path:
     return TILE_DIR / f"{t[0]}_{t[1]}.json.gz"
 
 
-def load_tile(t: tuple[int, int]) -> list[dict] | None:
+def load_tile(t: tuple[int, int], max_age_s: float | None = None) -> list[dict] | None:
+    """Elements of a cached tile, or None if we have no tile. Old tiles are still served
+    (old road data beats none); pass max_age_s to treat old tiles as missing (prewarm script)."""
     path = _tile_path(t)
-    if not path.exists() or time.time() - path.stat().st_mtime > TILE_MAX_AGE_S:
+    if not path.exists():
+        return None
+    if max_age_s is not None and time.time() - path.stat().st_mtime > max_age_s:
         return None
     with gzip.open(path, "rt") as fh:
-        return json.load(fh)["elements"]
+        data = json.load(fh)
+    return unpack_tile(data) if data.get("v") == 2 else data["elements"]
+
+
+def pack_tile(elements: list[dict]) -> dict:
+    """Compact tile format (v2), ~4x smaller than Overpass JSON:
+    nodes sorted by id, stored as delta-coded ids and 1e-6 degree coordinates;
+    ways as [highway, oneway, node indexes]. Way ids are not needed."""
+    nodes = sorted((e for e in elements if e["type"] == "node"), key=lambda e: e["id"])
+    index = {n["id"]: i for i, n in enumerate(nodes)}
+    ids, lats, lons = [], [], []
+    pid = plat = plon = 0
+    for n in nodes:
+        lat, lon = round(n["lat"] * 1e6), round(n["lon"] * 1e6)
+        ids.append(n["id"] - pid); lats.append(lat - plat); lons.append(lon - plon)
+        pid, plat, plon = n["id"], lat, lon
+    ways = []
+    for w in (e for e in elements if e["type"] == "way"):
+        refs = [index[i] for i in w.get("nodes", []) if i in index]
+        if len(refs) >= 2:
+            tags = w.get("tags", {})
+            ways.append([tags.get("highway", ""), tags.get("oneway", ""), refs])
+    return {"v": 2, "ids": ids, "lat": lats, "lon": lons, "ways": ways}
+
+
+def unpack_tile(d: dict) -> list[dict]:
+    els: list[dict] = []
+    ids: list[int] = []
+    i = la = lo = 0
+    for di, dla, dlo in zip(d["ids"], d["lat"], d["lon"]):
+        i, la, lo = i + di, la + dla, lo + dlo
+        ids.append(i)
+        els.append({"type": "node", "id": i, "lat": la / 1e6, "lon": lo / 1e6})
+    for k, (hw, oneway, refs) in enumerate(d["ways"]):
+        tags = {"highway": hw}
+        if oneway:
+            tags["oneway"] = oneway
+        # synthetic id, unique per way shape so merging tiles keeps one copy of a shared way
+        els.append({"type": "way", "id": hash((ids[refs[0]], ids[refs[-1]], len(refs))), "nodes": [ids[r] for r in refs], "tags": tags})
+    return els
 
 
 def save_tile(t: tuple[int, int], elements: list[dict]) -> None:
     TILE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = _tile_path(t).with_suffix(".tmp")
-    with gzip.open(tmp, "wt") as fh:
-        json.dump({"elements": elements}, fh)
+    with gzip.open(tmp, "wt", compresslevel=9) as fh:
+        json.dump(pack_tile(elements), fh, separators=(",", ":"))
     tmp.replace(_tile_path(t))
 
 
@@ -163,6 +226,8 @@ def fetch_roads(position: LatLon, radius_m: float = 800) -> RoadGraph:
     partial = cached_roads(position, radius_m, allow_partial=True)
     if partial is not None and partial.adj:
         return partial  # edge of the cached area: use what we have rather than wait on Overpass
+    if not OVERPASS_LIVE:
+        raise NoRoadData("no road data for this area on the server")
     query = (
         f'[out:json][timeout:{OVERPASS_TIMEOUT_S}];way(around:{radius_m:.0f},{position[0]},{position[1]})'
         f'[highway~"^({ROAD_TYPES})$"];(._;>;);out body;'

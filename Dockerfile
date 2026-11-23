@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend backend
 COPY web web
+# Road data for the whole region (Metro Manila + nearby provinces), built monthly on GitHub.
+RUN python backend/tools/fetch_region_tiles.py
 
 # Non-root user; /data holds the SQLite database (mount a persistent disk there).
 RUN useradd --create-home app && mkdir -p /data && chown -R app /data /srv/backend/data

@@ -99,6 +99,10 @@ class RideStartIn(BaseModel):
     destination: LatLonIn | None = None
     heading_deg: float | None = Field(None, ge=0, lt=360, description="GPS course over ground")
     lookahead_m: float = Field(1500, ge=200, le=5000)
+    roads: list[dict] | None = Field(
+        None, max_length=80_000,
+        description="OpenStreetMap elements around the rider (Overpass JSON), sent by the phone when the server has no roads here",
+    )
 
 
 class ChatIn(BaseModel):
@@ -126,6 +130,18 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def unhandled(req: Request, exc: Exception):
         log.exception("unhandled error on %s %s", req.method, req.url.path)
         return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    @app.middleware("http")
+    async def body_cap(req: Request, call_next):
+        # JSON bodies (ride start with phone roads is the biggest) stay under 4 MB; uploads have their own caps
+        if req.headers.get("content-type", "").startswith("application/json"):
+            try:
+                size = int(req.headers.get("content-length") or 0)
+            except ValueError:
+                size = 0
+            if size > 4 * 1024 * 1024:
+                return JSONResponse({"detail": "request too large"}, status_code=413)
+        return await call_next(req)
 
     def store(req: Request) -> Store:
         return req.app.state.store
@@ -246,7 +262,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def ride_start(body: RideStartIn, req: Request):
         """Everything the phone needs at ride start: route/road ahead, curves, weather, hotspots."""
         limit(req, "ride")
-        return start_ride(body.position, body.destination, body.heading_deg, body.lookahead_m)
+        return start_ride(body.position, body.destination, body.heading_deg, body.lookahead_m, body.roads)
 
     @app.post("/roads/snap")
     def roads_snap(body: PointsIn, req: Request, token: Token = None):

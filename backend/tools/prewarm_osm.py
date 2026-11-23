@@ -54,7 +54,7 @@ def main(argv=None) -> int:
     else:
         tiles = tiles_for_gpx(a.gpx, a.km)
 
-    todo = [t for t in tiles if a.force or osm.load_tile(t) is None]
+    todo = [t for t in tiles if a.force or osm.load_tile(t, max_age_s=osm.TILE_MAX_AGE_S) is None]
     print(f"{len(tiles)} tiles in area, {len(todo)} to download")
     if todo and not a.per_tile:
         # One request for the whole box, then slice into tiles (much faster on busy public servers).
