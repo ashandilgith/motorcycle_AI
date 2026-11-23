@@ -56,7 +56,10 @@ def start_ride(
             if roads is not None:
                 warnings.append("OpenStreetMap fetch failed (no roads near you in the data sent)")
         except Exception as exc:
-            warnings.append(f"OpenStreetMap fetch failed ({exc})")
+            if roads is None:
+                need_roads = True  # server couldn't get roads: let the phone try
+            else:
+                warnings.append(f"OpenStreetMap fetch failed ({exc})")
 
     try:
         wx = asdict(weather.road_weather(position))

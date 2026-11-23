@@ -34,7 +34,8 @@ TILE_DIR = Path(os.getenv("OSM_TILE_DIR", Path(__file__).resolve().parents[2] / 
 TILE_MAX_AGE_S = 60 * 24 * 3600  # prewarm script refreshes tiles older than this; old tiles are still served
 # Live Overpass from the server. Off on Render: the public servers don't answer its IPs, so the
 # phone fetches the roads itself instead (see ride.start_ride and web/js/roads.js).
-OVERPASS_LIVE = os.getenv("OVERPASS_LIVE", "1") not in ("0", "false", "no")
+# Render sets RENDER=true, so live lookups default to off there.
+OVERPASS_LIVE = os.getenv("OVERPASS_LIVE", "0" if os.getenv("RENDER") else "1") not in ("0", "false", "no")
 ROAD_TYPES = (
     "trunk|primary|secondary|tertiary|unclassified|residential|living_street|service"
     "|trunk_link|primary_link|secondary_link|tertiary_link"
