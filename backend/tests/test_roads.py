@@ -140,24 +140,23 @@ def test_phone_roads_module_fetches_once_and_server_accepts_it():
     script = f"""
 const m = await import({json.dumps(roads_js)});
 const payload = JSON.parse(process.argv[1]);
-let calls = 0, firstFails = true;
+let downloads = 0;
 globalThis.fetch = async (url) => {{
-  calls++;
-  if (firstFails && url.includes("overpass-api.de")) {{ firstFails = false; return {{ ok: false, status: 504 }}; }}
-  return {{ ok: true, json: async () => payload }};
+  if (url.includes("mail.ru")) {{ downloads++; return {{ ok: true, json: async () => payload }}; }}
+  return {{ ok: false, status: 504 }};  // every other server is down
 }};
 const a = await m.roadsNear({json.dumps(list(pos))});
-const callsAfterFirst = calls;
+const callsAfterFirst = downloads;
 const b = await m.roadsNear({json.dumps(list(near))});   // inside the reuse zone: no download
 const cached = m.cachedRoadsNear({json.dumps(list(far))});  // too far: nothing cached for there
 await m.roadsNear({json.dumps(list(far))});
-console.log(JSON.stringify({{ a, callsAfterFirst, cached, total: calls, bLen: b.length }}));
+console.log(JSON.stringify({{ a, callsAfterFirst, cached, total: downloads, bLen: b.length }}));
 """
     res = subprocess.run([node, "--input-type=module", "-e", script, json.dumps(overpass_payload())], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
-    assert out["callsAfterFirst"] == 2          # first server failed, mirror answered
-    assert out["cached"] is None and out["total"] == 3  # far point needed one more download
+    assert out["callsAfterFirst"] == 1          # other servers failed, the working one answered
+    assert out["cached"] is None and out["total"] == 2  # near point reused it; far point downloaded again
     c = TestClient(create_app(db_path=":memory:"))
     r = c.post("/ride/start", json={"position": pos, "heading_deg": 0, "roads": out["a"]}).json()
     assert len(r["curves"]) >= 1

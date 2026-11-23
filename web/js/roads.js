@@ -3,12 +3,21 @@
 // Fetch a wide circle once, reuse it while the rider stays well inside, and send only what's near.
 import { haversineM } from "./alert.js";
 
-const SERVERS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+// Public servers, all slow and sometimes down (browser check 23 Nov 2026, 1.5 km in Baguio:
+// maps.mail.ru 15 s, z./lz4.overpass-api.de ~36 s, overpass-api.de / kumi / private.coffee >40 s).
+// Ask all at once and take the first good answer.
+const SERVERS = [
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+  "https://z.overpass-api.de/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
 // same road types as the server's tiles (no service roads: driveways and parking aisles)
 const TYPES = "trunk|primary|secondary|tertiary|unclassified|residential|living_street|trunk_link|primary_link|secondary_link|tertiary_link";
 export const FETCH_RADIUS_M = 1500;
 export const SEND_RADIUS_M = 1000;
-const TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = 45_000;
 
 let cache = null; // {center, elements}
 
@@ -29,22 +38,28 @@ export async function roadsNear(pos) {
 }
 
 async function download([lat, lon], radiusM) {
-  const q = `[out:json][timeout:25];way(around:${radiusM},${lat.toFixed(6)},${lon.toFixed(6)})[highway~"^(${TYPES})$"]->.w;.w out body qt;node(w.w);out skel qt;`;
-  const errors = [];
-  for (const url of SERVERS) {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const q = `[out:json][timeout:40];way(around:${radiusM},${lat.toFixed(6)},${lon.toFixed(6)})[highway~"^(${TYPES})$"]->.w;.w out body qt;node(w.w);out skel qt;`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const ask = async (url) => {
     try {
       const r = await fetch(url, { method: "POST", body: new URLSearchParams({ data: q }), signal: ctl.signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return (await r.json()).elements || [];
+      const data = await r.json();
+      if (!Array.isArray(data.elements)) throw new Error("bad answer");
+      return data.elements;
     } catch (e) {
-      errors.push(`${new URL(url).host}: ${e.name === "AbortError" ? "timeout" : e.message}`);
-    } finally {
-      clearTimeout(timer);
+      throw new Error(`${new URL(url).host}: ${e.name === "AbortError" ? "timeout" : e.message}`);
     }
+  };
+  try {
+    return await Promise.any(SERVERS.map(ask));
+  } catch (e) {
+    throw new Error(`map servers busy (${(e.errors || [e]).map((x) => x.message).join("; ")})`);
+  } finally {
+    clearTimeout(timer);
+    ctl.abort(); // stop the slower servers
   }
-  throw new Error(`map servers busy (${errors.join("; ")})`);
 }
 
 /** Only nodes within radius of pos and the road pieces between them, minimal fields. */

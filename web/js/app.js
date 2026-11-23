@@ -71,7 +71,7 @@ async function fetchRide(position, heading) {
     let data = await postRide(body);
     if (data.need_roads) {
       // server has no road data here: get it from OpenStreetMap on the phone, then ask again
-      setStatus("Loading road from map…");
+      setStatus("Loading road from map (up to 45 s)…");
       body.roads = await roadsNear(position);
       data = await postRide(body);
     }

@@ -1,6 +1,6 @@
 // Caches the app shell so it opens instantly and survives weak signal.
 // API calls (/ride, /weather, /demo ...) always go to the network.
-const CACHE = "moto-ai-v3";
+const CACHE = "moto-ai-v4";
 const SHELL = ["./", "index.html", "css/app.css", "js/app.js", "js/alert.js", "js/beeper.js", "js/garage.js", "js/roads.js", "privacy.html", "terms.html", "css/legal.css", "manifest.webmanifest", "icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
