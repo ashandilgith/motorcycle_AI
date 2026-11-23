@@ -236,3 +236,13 @@ def test_prewarm_script(tmp_path, monkeypatch):
     assert prewarm_osm.main(["--around", f"{ORIGIN[0]},{ORIGIN[1]}", "--km", "0.5", "--pause", "0"]) == 0
     assert len(list(tmp_path.glob("*.json.gz"))) >= 1
     assert prewarm_osm.main(["--around", f"{ORIGIN[0]},{ORIGIN[1]}", "--km", "0.5", "--pause", "0"]) == 0  # all cached now
+
+
+def test_split_into_tiles_matches_cache_lookup(tmp_path, monkeypatch):
+    monkeypatch.setattr(osm, "TILE_DIR", tmp_path)
+    pieces = osm.split_into_tiles(overpass_payload()["elements"])
+    for t in osm.tiles_for_circle(ORIGIN, 600):
+        osm.save_tile(t, pieces.get(t, []))
+    http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))  # no network allowed
+    ahead = osm.road_ahead(osm.fetch_roads(offset(ORIGIN, 2, 5), 600), offset(ORIGIN, 2, 5), 0, 600)
+    assert ahead[-1][1] > ORIGIN[1] + 0.0004  # follows the road round the curve, from tiles only

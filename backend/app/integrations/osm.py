@@ -113,6 +113,34 @@ def fetch_tile(t: tuple[int, int], timeout_s: int = 90) -> list[dict]:
     raise RuntimeError("tile download failed: " + "; ".join(errors))
 
 
+def fetch_bbox(s: float, w: float, n: float, e: float, timeout_s: int = 180) -> list[dict]:
+    """Download a whole area in ONE request (much faster than tile by tile on busy servers)."""
+    query = f'[out:json][timeout:{timeout_s}];way({s:.4f},{w:.4f},{n:.4f},{e:.4f})[highway~"^({ROAD_TYPES})$"];(._;>;);out body;'
+    errors = []
+    for url in OVERPASS_URLS:
+        try:
+            with client(timeout=timeout_s + 20) as c:
+                return c.post(url, data={"data": query}).raise_for_status().json()["elements"]
+        except Exception as exc:
+            errors.append(f"{url.split('/')[2]}: {type(exc).__name__}")
+    raise RuntimeError("area download failed: " + "; ".join(errors))
+
+
+def split_into_tiles(elements: list[dict]) -> dict[tuple[int, int], list[dict]]:
+    """Cut an area download into cache tiles. A tile holds every road with a point inside it,
+    plus all of that road's points (same as a per-tile download), so neighbouring tiles join up."""
+    nodes = {e["id"]: e for e in elements if e["type"] == "node"}
+    tiles: dict[tuple[int, int], dict[tuple[str, int], dict]] = {}
+    for way in (e for e in elements if e["type"] == "way"):
+        pts = [nodes[i] for i in way.get("nodes", []) if i in nodes]
+        for t in {tile_of(n["lat"], n["lon"]) for n in pts}:
+            bucket = tiles.setdefault(t, {})
+            bucket[("way", way["id"])] = way
+            for n in pts:
+                bucket[("node", n["id"])] = n
+    return {t: list(b.values()) for t, b in tiles.items()}
+
+
 def cached_roads(position: LatLon, radius_m: float) -> RoadGraph | None:
     """Road graph from cached tiles, if every tile the circle touches is cached."""
     merged: dict[tuple[str, int], dict] = {}

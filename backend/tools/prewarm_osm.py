@@ -43,6 +43,7 @@ def main(argv=None) -> int:
     ap.add_argument("--km", type=float, default=2.0)
     ap.add_argument("--pause", type=float, default=2.0, help="seconds between requests")
     ap.add_argument("--force", action="store_true", help="re-download cached tiles")
+    ap.add_argument("--per-tile", action="store_true", help="download tile by tile instead of one area request")
     a = ap.parse_args(argv)
 
     if a.around:
@@ -55,6 +56,19 @@ def main(argv=None) -> int:
 
     todo = [t for t in tiles if a.force or osm.load_tile(t) is None]
     print(f"{len(tiles)} tiles in area, {len(todo)} to download")
+    if todo and not a.per_tile:
+        # One request for the whole box, then slice into tiles (much faster on busy public servers).
+        s_, w_ = min(t[0] for t in todo) * osm.TILE_DEG, min(t[1] for t in todo) * osm.TILE_DEG
+        n_, e_ = (max(t[0] for t in todo) + 1) * osm.TILE_DEG, (max(t[1] for t in todo) + 1) * osm.TILE_DEG
+        try:
+            print(f"downloading area {s_:.2f},{w_:.2f},{n_:.2f},{e_:.2f} in one request…")
+            pieces = osm.split_into_tiles(osm.fetch_bbox(s_, w_, n_, e_))
+            for t in todo:
+                osm.save_tile(t, pieces.get(t, []))  # empty tile = no roads there (fields, water)
+            print(f"done: {len(todo)} tiles, {sum(len(v) for v in pieces.values())} elements")
+            return 0
+        except Exception as exc:
+            print(f"area download failed ({exc}); falling back to tile by tile")
     failed = 0
     for k, t in enumerate(todo, 1):
         try:
