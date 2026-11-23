@@ -1,0 +1,43 @@
+# Build road tiles from the Geofabrik Philippines OpenStreetMap extract and commit them.
+# Reliable and fast (one file download, no busy public servers). Render redeploys with the tiles.
+# Run: Actions > "Build road tiles" > Run workflow, or
+#   gh api -X POST repos/<owner>/<repo>/actions/workflows/build-tiles.yml/dispatches -f ref=main -f 'inputs[bbox]=14.59,121.17,14.66,121.24'
+name: Build road tiles
+on:
+  workflow_dispatch:
+    inputs:
+      bbox:
+        description: "Area as south,west,north,east (default: Marcos Highway, Antipolo test area)"
+        default: "14.59,121.17,14.66,121.24"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency: road-tiles
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - name: Download Philippines extract (Geofabrik)
+        run: curl -fsSL --retry 3 -o /tmp/ph.osm.pbf https://download.geofabrik.de/asia/philippines-latest.osm.pbf && ls -lh /tmp/ph.osm.pbf
+      - name: Build tiles
+        working-directory: backend
+        run: python -m tools.tiles_from_pbf --pbf /tmp/ph.osm.pbf --bbox "${{ inputs.bbox }}"
+      - name: Commit tiles
+        run: |
+          git add backend/data/osm_tiles
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          n=$(git diff --cached --name-only | wc -l)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Road tiles for ${{ inputs.bbox }} ($n tiles, OpenStreetMap via Geofabrik)"
+          git pull --rebase
+          git push

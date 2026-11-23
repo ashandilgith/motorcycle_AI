@@ -246,3 +246,29 @@ def test_split_into_tiles_matches_cache_lookup(tmp_path, monkeypatch):
     http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))  # no network allowed
     ahead = osm.road_ahead(osm.fetch_roads(offset(ORIGIN, 2, 5), 600), offset(ORIGIN, 2, 5), 0, 600)
     assert ahead[-1][1] > ORIGIN[1] + 0.0004  # follows the road round the curve, from tiles only
+
+
+def test_tiles_from_osm_extract(tmp_path, monkeypatch):
+    pytest.importorskip("osmium")
+    from tools import tiles_from_pbf
+    # write the demo road as a tiny .osm file (same format family as Geofabrik's .osm.pbf)
+    els = overpass_payload()["elements"]
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<osm version="0.6">']
+    for e in els:
+        if e["type"] == "node":
+            lines.append(f'<node id="{e["id"]}" version="1" lat="{e["lat"]}" lon="{e["lon"]}"/>')
+    for e in els:
+        if e["type"] == "way":
+            lines.append(f'<way id="{e["id"]}" version="1">' + "".join(f'<nd ref="{n}"/>' for n in e["nodes"])
+                         + f'<tag k="highway" v="{e["tags"]["highway"]}"/></way>')
+    lines.append('<way id="99" version="1"><nd ref="1"/><nd ref="2"/><tag k="waterway" v="river"/></way>')  # not a road
+    lines.append("</osm>")
+    f = tmp_path / "area.osm"
+    f.write_text("\n".join(lines))
+    monkeypatch.setattr(osm, "TILE_DIR", tmp_path / "tiles")
+    s, w = ORIGIN[0] - 0.01, ORIGIN[1] - 0.01
+    assert tiles_from_pbf.main(["--pbf", str(f), "--bbox", f"{s},{w},{ORIGIN[0] + 0.01},{ORIGIN[1] + 0.01}"]) == 0
+    http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))  # offline
+    graph = osm.fetch_roads(offset(ORIGIN, 2, 5), 600)
+    ahead = osm.road_ahead(graph, offset(ORIGIN, 2, 5), 0, 600)
+    assert ahead[-1][1] > ORIGIN[1] + 0.0004
