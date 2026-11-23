@@ -1,0 +1,22 @@
+# Render blueprint: New > Blueprint > pick this repo. Gives you an https://<name>.onrender.com address.
+services:
+  - type: web
+    name: moto-ai
+    runtime: docker
+    plan: starter            # a paid plan is needed for the persistent disk below
+    region: singapore        # closest Render region to Manila
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false          # paste in the Render dashboard; never commit keys
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ROUTE_TRAVEL_MODE
+        value: DRIVE
+      - key: LLM_MODEL
+        value: claude-sonnet-5-5
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1

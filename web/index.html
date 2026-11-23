@@ -14,6 +14,7 @@
   <header class="bar">
     <span id="status" class="chip">Ready</span>
     <button id="wetBtn" class="chip toggle" aria-pressed="false" title="Force wet-road speeds">Dry</button>
+    <button id="garageBtn" class="chip">Garage</button>
     <button id="settingsBtn" class="icon" aria-label="Settings">⚙</button>
   </header>
 
@@ -56,11 +57,90 @@
         </select>
       </label>
       <label>Volume <input id="volume" type="range" min="0.2" max="1" step="0.1" value="1"></label>
+      <label>Warning sensitivity
+        <select id="sensitivity">
+          <option value="cautious">Cautious (warns more, lower safe speeds)</option>
+          <option value="normal">Normal</option>
+          <option value="relaxed">Relaxed (fewer warnings)</option>
+        </select>
+      </label>
       <label>Destination (optional, "lat, lon")
         <input id="destination" inputmode="decimal" placeholder="14.5547, 121.0244">
       </label>
       <p class="hint">No destination: follows the road ahead of you (OpenStreetMap). Keep the screen on and the app open while riding.</p>
+      <p class="hint"><a href="privacy.html">Privacy notice</a> · <a href="terms.html">Terms of use</a> · <button type="button" id="showSafety" class="linkbtn">Safety info</button></p>
       <menu><button value="close" class="primary">Done</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="garage" class="sheet">
+    <div class="sheethead"><h2>Garage</h2><button id="gClose" class="icon" aria-label="Close">✕</button></div>
+
+    <section id="gNoBike">
+      <p>Add your bike to get maintenance reminders, engine-sound checks, tyre checks and the assistant.</p>
+      <form id="gRegForm" class="grid2">
+        <label>Make <input id="bMake" placeholder="Honda" autocomplete="off"></label>
+        <label>Model <input id="bModel" placeholder="Click 125" autocomplete="off"></label>
+        <label>Year <input id="bYear" type="number" inputmode="numeric" min="1980" max="2030"></label>
+        <label>Odometer (km) <input id="bOdo" type="number" inputmode="numeric" min="0"></label>
+        <label class="span2">I ride for
+          <select id="bUsage"><option value="commuter">Commuting</option><option value="gig">Delivery / ride-hailing</option><option value="diy">Leisure, I do my own maintenance</option></select>
+        </label>
+        <button class="primary span2">Add bike</button>
+        <p id="gRegOut" class="out span2"></p>
+      </form>
+    </section>
+
+    <section id="gHasBike" hidden>
+      <div class="card"><b id="gBikeName"></b><small id="gOdo"></small></div>
+
+      <h3>What's due</h3>
+      <ul id="gDue" class="due"></ul>
+
+      <h3>Log a service</h3>
+      <form id="svcForm" class="grid2">
+        <label class="span2">What <select id="svcItem"></select></label>
+        <label>Odometer (km) <input id="svcOdo" type="number" inputmode="numeric" min="0" required></label>
+        <label>Cost (₱) <input id="svcCost" type="number" inputmode="numeric" min="0"></label>
+        <button class="span2">Save</button>
+        <p id="svcOut" class="out span2"></p>
+      </form>
+
+      <h3>Engine sound check</h3>
+      <p class="hint">Phone about 30 cm from the exhaust, same spot every time. 10 s: idle, then 3 short revs.</p>
+      <label class="check"><input type="checkbox" id="sndBaseline"> My bike is running well (save as its normal sound; do this 3 times first)</label>
+      <button id="sndBtn" type="button">Record 10 s</button>
+      <p id="sndOut" class="out"></p>
+
+      <h3>Tyre photo check</h3>
+      <label class="filebtn">Take or choose a tyre photo<input id="tyreFile" type="file" accept="image/*" capture="environment"></label>
+      <p id="tyreOut" class="out"></p>
+
+      <h3>Ask about your bike</h3>
+      <div id="askLog" class="chat"></div>
+      <form id="askForm" class="askrow"><input id="askText" placeholder="Mga paps, ayaw mag start…" autocomplete="off"><button>Ask</button></form>
+      <p id="askOut" class="out"></p>
+
+      <h3>Your data</h3>
+      <button id="delBtn" type="button" class="danger">Delete my bike data</button>
+      <p id="delOut" class="out"></p>
+    </section>
+  </dialog>
+
+  <dialog id="onboard">
+    <form method="dialog" id="onboardForm">
+      <h2>Before you ride</h2>
+      <p>Moto AI beeps when you're faster than the safe speed for a curve ahead. It's an <b>aid, not an autopilot</b>.</p>
+      <ul class="limits">
+        <li><b>It doesn't see traffic</b>, people, potholes, flooding or road works.</li>
+        <li><b>Maps and GPS can be wrong.</b> A curve can be missing, or placed slightly off.</li>
+        <li><b>Safe speeds are estimates.</b> Always ride to the road and the conditions you see.</li>
+        <li><b>Keep the screen on and the app open.</b> On a phone browser, alerts stop when the screen turns off.</li>
+        <li><b>Don't touch the phone while riding.</b> Mount it before you start.</li>
+        <li>Follow speed limits and traffic laws. You are responsible for how you ride.</li>
+      </ul>
+      <label class="check"><input type="checkbox" id="acceptBox"> I understand and accept the <a href="terms.html">terms</a> and <a href="privacy.html">privacy notice</a>.</label>
+      <menu><button value="ok" id="acceptBtn" class="primary" disabled>Let's ride</button></menu>
     </form>
   </dialog>
 

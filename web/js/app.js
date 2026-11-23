@@ -1,6 +1,15 @@
 // Ride screen: GPS loop -> curve alert -> beeps (and optional voice).
 import { Level, actionDistanceM, cumulative, distanceAlong, evaluate, hotspotAhead } from "./alert.js";
 import { Beeper, speak } from "./beeper.js";
+import { initGarage } from "./garage.js";
+
+// Report our own JavaScript errors to the server log (no personal data, just the error).
+const APP_VERSION = "0.2.0";
+function reportError(message, where) {
+  try { fetch("/client-errors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: String(message).slice(0, 2000), where: String(where || "").slice(0, 300), version: APP_VERSION }) }); } catch { /* offline */ }
+}
+window.addEventListener("error", (e) => reportError(e.message, `${e.filename}:${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => reportError(e.reason?.stack || e.reason, "promise"));
 let filmSpeak = null;
 // delayMs lets the beeps finish before the voice starts (beeps + voice mode)
 const say = (text, delayMs = 0) => (filmSpeak ? filmSpeak(text, delayMs) : setTimeout(() => speak(text, settings.voiceLang === "tl" ? "fil-PH" : "en-US"), delayMs));
@@ -21,7 +30,8 @@ const MIN_REFETCH_MS = 10_000;
 const WEATHER_EVERY_MS = 10 * 60_000;
 
 // ---------- settings (localStorage can throw in some webviews) ----------
-const defaults = { soundMode: "beeps", voiceLang: "tl", volume: 1, destination: "" };
+const defaults = { soundMode: "beeps", voiceLang: "tl", volume: 1, destination: "", sensitivity: "normal" };
+const SAFETY_VERSION = "1"; // bump when the safety text changes, so riders see it again
 function loadSettings() {
   try { return { ...defaults, ...JSON.parse(localStorage.getItem("moto.settings") || "{}") }; } catch { return { ...defaults }; }
 }
@@ -127,7 +137,7 @@ function steady(alert) {
 
 function conditions() {
   const c = ride?.conditions || {};
-  return { wet: wetOverride || !!c.wet, night: !!c.night };
+  return { wet: wetOverride || !!c.wet, night: !!c.night, sensitivity: settings.sensitivity || "normal" };
 }
 
 // ---------- sound policy ----------
@@ -342,7 +352,25 @@ function parseLatLon(s) {
   return m.length === 2 && m.every(Number.isFinite) ? m : null;
 }
 
-$("startBtn").addEventListener("click", () => (watchId != null || demoTimer ? stop() : start()));
+// ---------- first-run safety screen ----------
+function accepted() { try { return localStorage.getItem("moto.safety") === SAFETY_VERSION; } catch { return window.__safetyOk === true; } }
+function showSafety() {
+  $("acceptBox").checked = accepted();
+  $("acceptBtn").disabled = !$("acceptBox").checked;
+  $("onboard").showModal();
+}
+$("acceptBox").addEventListener("change", () => { $("acceptBtn").disabled = !$("acceptBox").checked; });
+$("onboardForm").addEventListener("submit", () => {
+  if ($("acceptBox").checked) { try { localStorage.setItem("moto.safety", SAFETY_VERSION); } catch { window.__safetyOk = true; } }
+});
+$("onboard").addEventListener("cancel", (e) => { if (!accepted()) e.preventDefault(); }); // can't skip with Esc
+$("showSafety").addEventListener("click", () => { $("settings").close(); showSafety(); });
+
+$("startBtn").addEventListener("click", () => {
+  if (watchId != null || demoTimer) return stop();
+  if (!accepted()) return showSafety();
+  start();
+});
 $("demoBtn").addEventListener("click", demo);
 $("testBtn").addEventListener("click", () => {
   beeper.unlock();
@@ -353,11 +381,11 @@ $("testBtn").addEventListener("click", () => {
 });
 $("wetBtn").addEventListener("click", () => { wetOverride = !wetOverride; renderWet(); });
 $("settingsBtn").addEventListener("click", () => {
-  for (const k of ["soundMode", "voiceLang", "volume", "destination"]) $(k).value = settings[k];
+  for (const k of ["soundMode", "voiceLang", "volume", "destination", "sensitivity"]) $(k).value = settings[k];
   $("settings").showModal();
 });
 $("settings").addEventListener("close", () => {
-  for (const k of ["soundMode", "voiceLang", "volume", "destination"]) settings[k] = $(k).value;
+  for (const k of ["soundMode", "voiceLang", "volume", "destination", "sensitivity"]) settings[k] = $(k).value;
   beeper.volume = Number(settings.volume);
   saveSettings();
 });
@@ -384,3 +412,5 @@ if (new URLSearchParams(location.search).has("film")) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 renderWet();
+initGarage();
+if (!new URLSearchParams(location.search).has("film") && !accepted()) showSafety();

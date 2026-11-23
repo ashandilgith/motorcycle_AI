@@ -22,6 +22,7 @@ class AlertLevel(str, Enum):
 class RideConditions:
     wet: bool = False
     night: bool = False
+    sensitivity: str = "normal"   # cautious | normal | relaxed (rider setting, for field tuning)
 
 
 @dataclass
@@ -42,6 +43,9 @@ REACTION_S = 1.5
 CAUTION_FACTOR = 1.6         # warn earlier than the bare minimum
 LOOKAHEAD_M = 400.0
 NIGHT_SPEED_FACTOR = 0.9
+MIN_WARN_S = 4.0             # always give at least this much warning before a curve you're too fast for
+# Sensitivity scales the sideways grip assumed (a_lat); safe speed scales with its square root.
+SENSITIVITY_GRIP = {"cautious": 0.8, "normal": 1.0, "relaxed": 1.3}
 
 
 def action_distance_m(distance_m: float, speed_kmh: float) -> float:
@@ -75,12 +79,14 @@ def evaluate(
         safe = c.safe_kmh_wet if conditions.wet else c.safe_kmh_dry
         if conditions.night:
             safe *= NIGHT_SPEED_FACTOR
+        safe *= math.sqrt(SENSITIVITY_GRIP.get(conditions.sensitivity, 1.0))
         if math.isinf(safe) or speed_kmh <= safe:
             continue
         need = required_distance_m(speed_kmh, safe)
+        caution_at = max(need * CAUTION_FACTOR, speed_kmh / 3.6 * MIN_WARN_S)
         if d <= need:
             level = AlertLevel.URGENT
-        elif d <= need * CAUTION_FACTOR:
+        elif d <= caution_at:
             level = AlertLevel.CAUTION
         else:
             continue

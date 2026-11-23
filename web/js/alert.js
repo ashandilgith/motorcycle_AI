@@ -10,6 +10,9 @@ export const CAUTION_FACTOR = 1.6;
 export const LOOKAHEAD_M = 400;
 export const NIGHT_SPEED_FACTOR = 0.9;
 export const HOTSPOT_WARN_M = 150;
+export const MIN_WARN_S = 4.0;
+// Sensitivity scales the sideways grip assumed (a_lat); safe speed scales with its square root.
+export const SENSITIVITY_GRIP = { cautious: 0.8, normal: 1.0, relaxed: 1.3 };
 
 export const Level = Object.freeze({ NONE: "none", CAUTION: "caution", URGENT: "urgent" });
 const RANK = { none: 0, caution: 1, urgent: 2 };
@@ -63,7 +66,7 @@ export function requiredDistanceM(speedKmh, targetKmh) {
 }
 
 /** Most urgent curve alert ahead of positionM. curves: [{start_m, end_m, safe_kmh_dry, safe_kmh_wet, ...}] */
-export function evaluate(positionM, speedKmh, curves, { wet = false, night = false } = {}) {
+export function evaluate(positionM, speedKmh, curves, { wet = false, night = false, sensitivity = "normal" } = {}) {
   let worst = { level: Level.NONE, speedKmh };
   for (const c of curves) {
     let d = c.start_m - positionM;
@@ -72,11 +75,13 @@ export function evaluate(positionM, speedKmh, curves, { wet = false, night = fal
     if (d > LOOKAHEAD_M) break;
     let safe = wet ? c.safe_kmh_wet : c.safe_kmh_dry;
     if (night) safe *= NIGHT_SPEED_FACTOR;
+    safe *= Math.sqrt(SENSITIVITY_GRIP[sensitivity] ?? 1.0);
     if (!isFinite(safe) || speedKmh <= safe) continue;
     const need = requiredDistanceM(speedKmh, safe);
+    const cautionAt = Math.max(need * CAUTION_FACTOR, (speedKmh / 3.6) * MIN_WARN_S);
     let level;
     if (d <= need) level = Level.URGENT;
-    else if (d <= need * CAUTION_FACTOR) level = Level.CAUTION;
+    else if (d <= cautionAt) level = Level.CAUTION;
     else continue;
     if (RANK[level] > RANK[worst.level]) {
       const act = actionDistanceM(d, speedKmh);

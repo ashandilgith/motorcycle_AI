@@ -1,7 +1,9 @@
 """SQLite storage for bikes, service log and sound clips (MVP; swap for Postgres later)."""
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 import sqlite3
 import threading
 import time
@@ -17,7 +19,8 @@ CREATE TABLE IF NOT EXISTS bikes (
     year INTEGER,
     odometer_km REAL DEFAULT 0,
     usage TEXT DEFAULT 'commuter',          -- commuter | gig | diy
-    created_at REAL
+    created_at REAL,
+    token_hash TEXT                         -- sha256 of the bike's access key; the key itself is never stored
 );
 CREATE TABLE IF NOT EXISTS service_log (
     id TEXT PRIMARY KEY,
@@ -46,6 +49,10 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._conn.executescript(SCHEMA)
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(bikes)")}
+        if "token_hash" not in cols:  # databases created before access keys existed
+            self._conn.execute("ALTER TABLE bikes ADD COLUMN token_hash TEXT")
+            self._conn.commit()
 
     def _exec(self, sql: str, args: tuple = ()) -> list[dict]:
         with self._lock:
@@ -54,17 +61,47 @@ class Store:
             return [dict(r) for r in cur.fetchall()]
 
     # Bikes
+    @staticmethod
+    def _hash(token: str) -> str:
+        return hashlib.sha256(token.encode()).hexdigest()
+
     def add_bike(self, make: str, model: str, year: int | None, odometer_km: float, usage: str) -> dict:
+        """Create a bike. Returns it with `token`: the access key, shown only this once."""
         bid = uuid.uuid4().hex[:12]
+        token = secrets.token_urlsafe(24)
         self._exec(
-            "INSERT INTO bikes VALUES (?,?,?,?,?,?,?)",
-            (bid, make, model, year, odometer_km, usage, time.time()),
+            "INSERT INTO bikes (id, make, model, year, odometer_km, usage, created_at, token_hash) VALUES (?,?,?,?,?,?,?,?)",
+            (bid, make, model, year, odometer_km, usage, time.time(), self._hash(token)),
         )
-        return self.get_bike(bid)
+        return {**self.get_bike(bid), "token": token}
 
     def get_bike(self, bike_id: str) -> dict | None:
-        rows = self._exec("SELECT * FROM bikes WHERE id=?", (bike_id,))
+        rows = self._exec(
+            "SELECT id, make, model, year, odometer_km, usage, created_at FROM bikes WHERE id=?", (bike_id,)
+        )
         return rows[0] if rows else None
+
+    def check_token(self, bike_id: str, token: str | None) -> bool:
+        if not token:
+            return False
+        rows = self._exec("SELECT token_hash FROM bikes WHERE id=?", (bike_id,))
+        return bool(rows) and rows[0]["token_hash"] is not None and secrets.compare_digest(rows[0]["token_hash"], self._hash(token))
+
+    def any_valid_token(self, token: str | None) -> bool:
+        if not token:
+            return False
+        return bool(self._exec("SELECT 1 FROM bikes WHERE token_hash=?", (self._hash(token),)))
+
+    def delete_bike(self, bike_id: str) -> None:
+        """Erase a bike and everything linked to it (privacy: right to erasure)."""
+        with self._lock:
+            for table, col in (("sound_clips", "bike_id"), ("service_log", "bike_id"), ("bikes", "id")):
+                self._conn.execute(f"DELETE FROM {table} WHERE {col}=?", (bike_id,))
+            self._conn.commit()
+
+    def clip_bike(self, clip_id: str) -> str | None:
+        rows = self._exec("SELECT bike_id FROM sound_clips WHERE id=?", (clip_id,))
+        return rows[0]["bike_id"] if rows else None
 
     def update_odometer(self, bike_id: str, km: float) -> None:
         self._exec("UPDATE bikes SET odometer_km=MAX(odometer_km, ?) WHERE id=?", (km, bike_id))

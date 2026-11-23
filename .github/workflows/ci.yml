@@ -1,0 +1,34 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4     # for the phone-vs-server alert parity test
+        with:
+          node-version: "22"
+      - run: pip install -r backend/requirements.txt
+      - run: python -m pytest -q
+        working-directory: backend
+      - name: JavaScript syntax
+        run: for f in web/js/*.js web/sw.js; do node --check "$f"; done
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t moto-ai .
+      - name: Container starts and answers /health
+        run: |
+          docker run -d -p 8000:8000 --name moto moto-ai
+          for i in $(seq 1 20); do curl -fs localhost:8000/health && exit 0; sleep 1; done
+          docker logs moto; exit 1

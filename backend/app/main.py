@@ -5,12 +5,15 @@ Docs: http://localhost:8000/docs
 """
 from __future__ import annotations
 
+import logging
+import time
+from collections import defaultdict, deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -28,6 +31,34 @@ from .storage import Store
 
 LatLonIn = tuple[Annotated[float, Field(ge=-90, le=90)], Annotated[float, Field(ge=-180, le=180)]]
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+VERSION = "0.2.0"
+
+# The bike's access key, sent by the phone on every bike-scoped call (module level so FastAPI can resolve it).
+Token = Annotated[str | None, Header(alias="X-Bike-Token")]
+
+MAX_SOUND_BYTES = 5 * 1024 * 1024   # ~10 s of 16-bit WAV is under 1 MB
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+# Requests per minute per client IP, for endpoints that cost money or hit shared services.
+RATE_LIMITS = {"ride": 30, "weather": 30, "shops": 10, "ai": 10, "client_error": 20}
+
+log = logging.getLogger("motorcycle_ai")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+
+class RateLimiter:
+    """Small in-memory sliding-window limiter (one server process). Swap for Redis if you run several."""
+
+    def __init__(self):
+        self.hits: dict[tuple[str, str], deque] = defaultdict(deque)
+
+    def check(self, bucket: str, key: str, per_minute: int) -> None:
+        now = time.monotonic()
+        q = self.hits[(bucket, key)]
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= per_minute:
+            raise HTTPException(429, "too many requests, slow down", headers={"Retry-After": "60"})
+        q.append(now)
 
 
 # ---------- request models ----------
@@ -76,22 +107,53 @@ class ChatIn(BaseModel):
 
 
 class LabelIn(BaseModel):
-    label: str = Field(examples=["cvt_belt_worn"])
+    label: str = Field(max_length=80, examples=["cvt_belt_worn"])
+
+
+class ClientErrorIn(BaseModel):
+    message: str = Field(max_length=2000)
+    where: str | None = Field(None, max_length=300)
+    version: str | None = Field(None, max_length=40)
 
 
 # ---------- app ----------
 def create_app(db_path: str | None = None) -> FastAPI:
-    app = FastAPI(title="motorcycle_AI", version="0.1.0")
+    app = FastAPI(title="motorcycle_AI", version=VERSION)
     app.state.store = Store(db_path or settings.db_path)
+    limiter = RateLimiter()
+
+    @app.exception_handler(Exception)
+    async def unhandled(req: Request, exc: Exception):
+        log.exception("unhandled error on %s %s", req.method, req.url.path)
+        return JSONResponse({"detail": "internal error"}, status_code=500)
 
     def store(req: Request) -> Store:
         return req.app.state.store
 
-    def bike_or_404(req: Request, bike_id: str) -> dict:
+    def client_ip(req: Request) -> str:
+        fwd = req.headers.get("x-forwarded-for")  # behind a hosting proxy
+        return fwd.split(",")[0].strip() if fwd else (req.client.host if req.client else "?")
+
+    def limit(req: Request, bucket: str) -> None:
+        limiter.check(bucket, client_ip(req), RATE_LIMITS[bucket])
+
+    def bike_or_404(req: Request, bike_id: str, token: str | None) -> dict:
+        """The bike, if the caller holds its access key (X-Bike-Token). 404 either way, so ids can't be probed."""
         bike = store(req).get_bike(bike_id)
-        if not bike:
+        if not bike or not store(req).check_token(bike_id, token):
             raise HTTPException(404, "bike not found")
         return bike
+
+    def require_any_bike(req: Request, token: str | None) -> None:
+        """AI features cost money per call: only for riders who registered a bike."""
+        if not store(req).any_valid_token(token):
+            raise HTTPException(401, "register a bike first (X-Bike-Token)")
+
+    async def read_capped(file: UploadFile, cap: int) -> bytes:
+        data = await file.read(cap + 1)
+        if len(data) > cap:
+            raise HTTPException(413, f"file too large (max {cap // (1024 * 1024)} MB)")
+        return data
 
     @app.get("/", include_in_schema=False)
     def root():
@@ -117,28 +179,49 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def health():
         return {
             "ok": True,
+            "version": VERSION,
             "llm_configured": bool(settings.anthropic_api_key),
             "maps_configured": bool(settings.google_maps_api_key),
         }
 
-    # Bikes + maintenance
+    @app.post("/client-errors", status_code=204)
+    def client_error(body: ClientErrorIn, req: Request):
+        """The phone reports its own JavaScript errors here, so they show up in the server log."""
+        limit(req, "client_error")
+        log.warning("client error v=%s where=%s: %s", body.version, body.where, body.message)
+
+    # Bikes + maintenance. Every /bikes/{id} call needs the X-Bike-Token returned at registration.
+
     @app.post("/bikes")
     def add_bike(body: BikeIn, req: Request):
+        """Register a bike. The response's `token` is the bike's access key: shown once, keep it on the phone."""
+        limit(req, "ai")
         return store(req).add_bike(body.make, body.model, body.year, body.odometer_km, body.usage)
 
     @app.get("/bikes/{bike_id}")
-    def get_bike(bike_id: str, req: Request):
-        return bike_or_404(req, bike_id)
+    def get_bike(bike_id: str, req: Request, token: Token = None):
+        return bike_or_404(req, bike_id, token)
+
+    @app.delete("/bikes/{bike_id}", status_code=204)
+    def delete_bike(bike_id: str, req: Request, token: Token = None):
+        """Erase the bike, its service log and sound data."""
+        bike_or_404(req, bike_id, token)
+        store(req).delete_bike(bike_id)
+
+    @app.get("/bikes/{bike_id}/service")
+    def service_log(bike_id: str, req: Request, token: Token = None):
+        bike_or_404(req, bike_id, token)
+        return store(req).service_log(bike_id)
 
     @app.post("/bikes/{bike_id}/service")
-    def add_service(bike_id: str, body: ServiceIn, req: Request):
-        bike_or_404(req, bike_id)
+    def add_service(bike_id: str, body: ServiceIn, req: Request, token: Token = None):
+        bike_or_404(req, bike_id, token)
         return store(req).add_service(bike_id, body.item, body.odometer_km, body.cost_php, body.notes)
 
     @app.get("/bikes/{bike_id}/maintenance")
-    def maintenance(bike_id: str, req: Request):
-        bike = bike_or_404(req, bike_id)
-        return next_due(bike["odometer_km"], bike["usage"], store(req).service_log(bike_id))
+    def maintenance(bike_id: str, req: Request, token: Token = None):
+        bike = bike_or_404(req, bike_id, token)
+        return next_due(bike["odometer_km"], bike["usage"], store(req).service_log(bike_id), bike["model"])
 
     # Curves
     def _curves_payload(points):
@@ -160,21 +243,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return {"points": points, **_curves_payload(points)}
 
     @app.post("/ride/start")
-    def ride_start(body: RideStartIn):
+    def ride_start(body: RideStartIn, req: Request):
         """Everything the phone needs at ride start: route/road ahead, curves, weather, hotspots."""
+        limit(req, "ride")
         return start_ride(body.position, body.destination, body.heading_deg, body.lookahead_m)
 
     @app.post("/roads/snap")
-    def roads_snap(body: PointsIn):
+    def roads_snap(body: PointsIn, req: Request, token: Token = None):
         """Snap a recorded GPS trace to roads (Google Roads API)."""
+        require_any_bike(req, token)
+        limit(req, "shops")
         return {"points": google_maps.snap_to_roads(body.points, maps_key())}
 
     @app.get("/shops/nearby")
-    def shops_nearby(lat: float, lon: float, open_now: bool = True, radius_m: float = 3000):
+    def shops_nearby(req: Request, lat: float, lon: float, open_now: bool = True, radius_m: float = 3000, token: Token = None):
+        require_any_bike(req, token)
+        limit(req, "shops")
         return google_maps.repair_shops((lat, lon), maps_key(), radius_m=radius_m, open_now=open_now)
 
     @app.get("/weather")
-    def road_weather(lat: float, lon: float):
+    def road_weather(req: Request, lat: float, lon: float):
+        limit(req, "weather")
         try:
             return asdict(weather.road_weather((lat, lon)))
         except Exception as exc:  # upstream down: tell the phone, which keeps its last value
@@ -198,11 +287,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     # Sound
     @app.post("/bikes/{bike_id}/sound")
-    async def sound_check(bike_id: str, req: Request, file: UploadFile = File(...), baseline: bool = False):
+    async def sound_check(bike_id: str, req: Request, file: UploadFile = File(...), baseline: bool = False, token: Token = None):
         """Upload a 16-bit WAV (10 s idle + 3 revs). baseline=true while the bike is known healthy."""
-        bike_or_404(req, bike_id)
+        bike_or_404(req, bike_id, token)
+        data = await read_capped(file, MAX_SOUND_BYTES)
         try:
-            audio, rate = read_wav(await file.read())
+            audio, rate = read_wav(data)
         except Exception as exc:
             raise HTTPException(400, f"could not read WAV: {exc}")
         emb = embed(audio, rate)
@@ -214,17 +304,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return {"clip_id": clip_id, **asdict(result)}
 
     @app.post("/clips/{clip_id}/label")
-    def label_clip(clip_id: str, body: LabelIn, req: Request):
+    def label_clip(clip_id: str, body: LabelIn, req: Request, token: Token = None):
         """Mechanic-confirmed finding -> training label for the future fault classifier."""
+        bike_id = store(req).clip_bike(clip_id)
+        if not bike_id or not store(req).check_token(bike_id, token):
+            raise HTTPException(404, "clip not found")
         if not store(req).label_clip(clip_id, body.label):
             raise HTTPException(404, "clip not found")
         return {"ok": True}
 
     # Tyre (VLM)
     @app.post("/tyre/check")
-    async def tyre_check(file: UploadFile = File(...)):
+    async def tyre_check(req: Request, file: UploadFile = File(...), token: Token = None):
+        require_any_bike(req, token)
+        limit(req, "ai")
         try:
-            return vision.check_tyre(await file.read())
+            return vision.check_tyre(await read_capped(file, MAX_IMAGE_BYTES))
         except RuntimeError as exc:
             raise HTTPException(503, str(exc))
         except ValueError as exc:
@@ -232,8 +327,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     # Assistant
     @app.post("/bikes/{bike_id}/chat")
-    def chat(bike_id: str, body: ChatIn, req: Request):
-        bike_or_404(req, bike_id)
+    def chat(bike_id: str, body: ChatIn, req: Request, token: Token = None):
+        bike_or_404(req, bike_id, token)
+        limit(req, "ai")
         try:
             return assistant.chat(store(req), bike_id, body.messages, location=body.location)
         except RuntimeError as exc:

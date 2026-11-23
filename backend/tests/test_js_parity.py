@@ -25,7 +25,7 @@ const cum = m.cumulative(p.points);
 const out = {{ along: [], alerts: [], hotspots: [] }};
 for (const pos of p.positions) out.along.push(m.distanceAlong(p.points, cum, pos));
 for (const s of p.scenarios) {{
-  const a = m.evaluate(s.pos_m, s.speed, p.curves, {{ wet: s.wet, night: s.night }});
+  const a = m.evaluate(s.pos_m, s.speed, p.curves, {{ wet: s.wet, night: s.night, sensitivity: s.sens }});
   out.alerts.push({{ level: a.level, safe: a.safeKmh ?? null, dist: a.distanceM ?? null, act: a.actionM ?? null, en: a.messageEn ?? null }});
 }}
 for (const x of p.hotspot_pos) {{ const h = m.hotspotAhead(x, p.hotspots); out.hotspots.push(h ? h.distanceM : null); }}
@@ -42,11 +42,12 @@ def test_js_matches_python():
     curves_d = [asdict(c) for c in curves]
     positions = [offset(ORIGIN, dx, dy) for dx, dy in [(0, 0), (3, 100), (-4, 250), (20, 320), (60, 340), (150, 345)]]
     scenarios = [
-        {"pos_m": curves[0].start_m - d, "speed": v, "wet": wet, "night": night}
+        {"pos_m": curves[0].start_m - d, "speed": v, "wet": wet, "night": night, "sens": sens}
         for d in (400, 200, 120, 95, 80, 50, 30, 5, -20)
         for v in (25, 40, 55, 70, 90)
         for wet in (False, True)
         for night in (False, True)
+        for sens in ("cautious", "normal", "relaxed")
     ]
     hs = [{"name": "X", "lat": 0, "lon": 0, "at_m": 300.0}]
     hotspot_pos = [100, 150, 160, 299, 300, 301]
@@ -59,7 +60,7 @@ def test_js_matches_python():
         assert j["offM"] == pytest.approx(off, abs=1e-6)
 
     for s, j in zip(scenarios, js["alerts"]):
-        a = evaluate(s["pos_m"], s["speed"], curves, RideConditions(s["wet"], s["night"]))
+        a = evaluate(s["pos_m"], s["speed"], curves, RideConditions(s["wet"], s["night"], s["sens"]))
         assert j["level"] == a.level.value, s
         if a.safe_kmh is not None:
             assert j["safe"] == pytest.approx(a.safe_kmh)

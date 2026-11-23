@@ -174,12 +174,14 @@ def test_ride_start_survives_weather_outage(monkeypatch):
 
 def test_shop_endpoints_need_key():
     c = TestClient(create_app(db_path=":memory:"))
-    assert c.get("/shops/nearby", params={"lat": 14.6, "lon": 121.0}).status_code == 503
+    tok = c.post("/bikes", json={"make": "Honda", "model": "Click"}).json()["token"]
+    assert c.get("/shops/nearby", params={"lat": 14.6, "lon": 121.0}, headers={"X-Bike-Token": tok}).status_code == 503
 
 
 def test_shops_endpoint(keys):
     c = TestClient(create_app(db_path=":memory:"))
-    r = c.get("/shops/nearby", params={"lat": 14.6, "lon": 121.0})
+    tok = c.post("/bikes", json={"make": "Honda", "model": "Click"}).json()["token"]
+    r = c.get("/shops/nearby", params={"lat": 14.6, "lon": 121.0}, headers={"X-Bike-Token": tok})
     assert r.status_code == 200 and r.json()[0]["phone"]
 
 
@@ -207,3 +209,30 @@ def test_overpass_all_down_reports_each_server():
     http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))
     with pytest.raises(RuntimeError, match="overpass-api.de.*overpass.kumi.systems"):
         osm.fetch_roads(ORIGIN)
+
+
+def test_tile_cache_serves_rides_without_network(tmp_path, monkeypatch):
+    monkeypatch.setattr(osm, "TILE_DIR", tmp_path)
+    # prewarm: every tile around the start gets the demo road
+    for t in osm.tiles_for_circle(ORIGIN, 800):
+        osm.save_tile(t, overpass_payload()["elements"])
+    calls = []
+    http.set_transport(httpx.MockTransport(lambda r: calls.append(r.url.host) or httpx.Response(502)))
+    graph = osm.fetch_roads(offset(ORIGIN, 2, 5), radius_m=800)
+    ahead = osm.road_ahead(graph, offset(ORIGIN, 2, 5), heading_deg=0, lookahead_m=600)
+    assert calls == [] and len(ahead) > 10
+
+
+def test_partial_cache_falls_back_to_live(tmp_path, monkeypatch):
+    monkeypatch.setattr(osm, "TILE_DIR", tmp_path)
+    osm.save_tile(osm.tile_of(*ORIGIN), overpass_payload()["elements"])  # only one tile
+    graph = osm.fetch_roads(ORIGIN, radius_m=3000)  # needs more tiles -> live (mocked OK)
+    assert graph.adj
+
+
+def test_prewarm_script(tmp_path, monkeypatch):
+    from tools import prewarm_osm
+    monkeypatch.setattr(osm, "TILE_DIR", tmp_path)
+    assert prewarm_osm.main(["--around", f"{ORIGIN[0]},{ORIGIN[1]}", "--km", "0.5", "--pause", "0"]) == 0
+    assert len(list(tmp_path.glob("*.json.gz"))) >= 1
+    assert prewarm_osm.main(["--around", f"{ORIGIN[0]},{ORIGIN[1]}", "--km", "0.5", "--pause", "0"]) == 0  # all cached now

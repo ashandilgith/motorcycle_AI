@@ -24,8 +24,8 @@ Rules:
   keeps returning: tell them to stop riding and see a mechanic now.
 - Never tell a rider to open a hot radiator cap. Wait until the engine is fully cool.
 - After floods: do NOT start the engine until oil, air filter and exhaust are checked.
-- Maintenance intervals in tools are placeholders until verified; say "check your owner's manual"
-  when giving an interval.
+- Maintenance items carry a "source": "manual" figures come from the maker's manual (name it);
+  "estimate" figures are generic, so say "check your owner's manual" when giving them.
 - Give peso estimates only as rough ranges and say they vary by shop.
 - If the rider is stranded or needs a shop, call find_nearby_shops (needs their location) and list
   2-3 open shops with name, address and phone."""
@@ -80,7 +80,7 @@ def _tool_impls(store: Store, bike_id: str, location=None) -> dict[str, Callable
         "find_nearby_shops": shops,
         "get_bike_profile": bike,
         "get_service_log": lambda: store.service_log(bike_id),
-        "get_maintenance_due": lambda: next_due(bike()["odometer_km"], bike()["usage"], store.service_log(bike_id)),
+        "get_maintenance_due": lambda: next_due(bike()["odometer_km"], bike()["usage"], store.service_log(bike_id), bike()["model"]),
         "get_recent_sound_checks": lambda: store.recent_clips(bike_id),
     }
 

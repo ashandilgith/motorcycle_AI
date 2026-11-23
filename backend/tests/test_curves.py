@@ -83,3 +83,21 @@ def test_never_says_brake_inside_a_curve():
     inside = evaluate((c.start_m + c.end_m) / 2, 60, curves)
     assert inside.level == AlertLevel.URGENT
     assert "Brake" not in inside.message_en and "Ease off" in inside.message_en
+
+
+def test_minimum_warning_time_for_small_overspeed():
+    # 60 km/h into a curve safe at ~56: braking need is tiny, but we still warn >= 4 s ahead
+    _, _, curves = find_curves(road_with_curve(radius_m=100))
+    c = curves[0]
+    v = c.safe_kmh_dry + 4
+    d4 = v / 3.6 * 4.0
+    assert evaluate(c.start_m - (d4 - 1), v, curves).level != AlertLevel.NONE
+    assert evaluate(c.start_m - (d4 + 30), v, curves).level == AlertLevel.NONE
+
+
+def test_sensitivity_changes_safe_speed():
+    _, _, curves = find_curves(road_with_curve(radius_m=40))
+    pos = curves[0].start_m - 30
+    cautious = evaluate(pos, 40, curves, RideConditions(sensitivity="cautious"))
+    relaxed = evaluate(pos, 40, curves, RideConditions(sensitivity="relaxed"))
+    assert cautious.level != AlertLevel.NONE and relaxed.level == AlertLevel.NONE

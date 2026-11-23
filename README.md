@@ -33,6 +33,9 @@ The MVP phone app is a **mobile web app (PWA)** in `web/`. The backend serves it
 - **Voice is an option.** In Settings, choose *Beeps + voice* or *Voice only*, in Taglish or English.
 - **Demo ride** plays a simulated ride into a sharp curve, so you can hear the alerts at your desk. **Test beeps** plays the sounds.
 - **Wet / Dry** chip: switches to wet-road safe speeds yourself. It also turns on automatically when it's raining.
+- **Warning sensitivity** (Settings): Cautious, Normal or Relaxed. Use it to tune on test rides. You always get at least 4 s of warning before a curve you're too fast for.
+- **First-run safety screen:** explains the app's limits. The rider must accept it before the first ride.
+- **Garage:** register your bike, log services, see what's due (NMAX intervals from Yamaha's manual, the rest marked as estimates), record a 10 s engine-sound check, check a tyre photo, ask the assistant, and delete your data.
 
 **GPS needs HTTPS** on a phone (the browser blocks location on plain http, except on localhost). The quickest test is a tunnel:
 
@@ -53,13 +56,39 @@ For real use, deploy the backend anywhere with HTTPS (Render, Fly.io, Cloud Run)
 
 **Demo video:** `demo_video/` renders a split-screen video (animated ride + the real app + its beeps and voice). See its README.
 
+## Deploy (pilot)
+
+1. **Host:** push to GitHub, then on [Render](https://render.com) choose **New → Blueprint** and pick this repo. `render.yaml` sets up a Docker web service in Singapore with HTTPS, a health check and a 1 GB disk for the database. Any Docker host works (`Dockerfile`); keep `/data` on a persistent disk.
+2. **Keys:** in the host's dashboard, set `GOOGLE_MAPS_API_KEY` (enable Routes, Roads, Places API (New)) and `ANTHROPIC_API_KEY`. Never commit them.
+3. **Road data:** fill the tile cache for your test areas, so rides don't wait on the slow public OpenStreetMap servers:
+   ```bash
+   cd backend
+   python -m tools.prewarm_osm --around 14.6240,121.2064 --km 3     # e.g. Marcos Highway, Antipolo
+   python -m tools.prewarm_osm --gpx my_route.gpx --km 1            # along a recorded route
+   ```
+   Tiles land in `backend/data/osm_tiles/`. Commit them or copy them to the server.
+4. **Phone:** open `https://<your-app>.onrender.com/app/` in Chrome on Android, then **Add to Home screen**.
+5. **Fill in** `[operator name]` and the contact emails in `web/privacy.html` and `web/terms.html`, and have a lawyer review both before a public launch.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the tests, the JavaScript checks and a Docker build plus health check on every push.
+
+## Security and privacy
+
+- **Bike access keys:** registering a bike returns a secret key, shown once and kept on the phone. Every `/bikes/{id}` call needs it in `X-Bike-Token`. The server stores only a hash. Without the key you get 404, so ids can't be probed.
+- **AI and Google endpoints** (`/tyre/check`, `/shops/nearby`, `/roads/snap`) need a registered bike's key, because they cost money per call.
+- **Rate limits** per IP: ride start 30/min, weather 30/min, AI and shops 10/min.
+- **Upload limits:** sound 5 MB, images 8 MB.
+- **Erasure:** `DELETE /bikes/{id}` removes the bike, its service log and its sound data. The phone has a "Delete my bike data" button.
+- **Not stored:** ride locations, raw engine audio, tyre photos and assistant messages.
+- **Error logging:** server errors and the phone's JavaScript errors (`/client-errors`) go to the server log.
+
 ## Quick start
 
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m pytest -q                    # 34 tests, no API keys or network needed
+python -m pytest -q                    # 52 tests, no API keys or network needed
 python -m tools.simulate_ride --wet    # replay a ride, see/hear the alerts
 uvicorn app.main:app --reload          # app: http://localhost:8000/app/  ·  API docs: /docs
 ```
@@ -87,7 +116,10 @@ Every external call goes through `app/integrations/http.py`, so tests swap in a 
 | POST | `/bikes` | Register a bike (make, model, year, odometer, usage: commuter/gig/diy) |
 | POST | `/bikes/{id}/service` | Log a service (e.g. `engine_oil` at 5,200 km) |
 | GET | `/bikes/{id}/maintenance` | What's overdue or due soon |
-| GET | `/app/` | The phone app |
+| GET | `/app/` | The phone app (+ `/app/privacy.html`, `/app/terms.html`) |
+| DELETE | `/bikes/{id}` | Erase a bike and its data (needs `X-Bike-Token`) |
+| GET | `/bikes/{id}/service` | Service log |
+| POST | `/client-errors` | Phone-side error reports |
 | GET | `/demo/ride` | Synthetic road for the demo ride |
 | POST | `/ride/start` | **Main call for the phone**: route (Google) or road ahead (OSM) + curves + weather + hotspots |
 | POST | `/routes/curves` | Google route → curves with safe dry/wet speeds |

@@ -4,14 +4,19 @@ Fetch the roads around the rider once (Overpass API), then guess the road
 ahead by following the straightest continuation from the rider's heading.
 Re-fetch when the rider leaves the guessed path (off_route_m) or nears its end.
 
-Production note: the public Overpass server is rate-limited. Before launch,
-run our own Overpass or pre-extract Metro Manila roads (Geofabrik PBF) and
-serve tiles from the backend.
+Road data comes from a tile cache on the server first (filled ahead of time by
+`tools/prewarm_osm.py`), and only falls back to a live Overpass query for areas
+not cached yet. The public Overpass servers are too slow to rely on live.
 """
 from __future__ import annotations
 
+import gzip
+import json
 import math
+import os
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..curves.geometry import LatLon, haversine_m, to_local_xy
 from .http import client
@@ -23,6 +28,10 @@ OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 OVERPASS_TIMEOUT_S = 12
+# Tile cache: 0.01 degree squares (~1.1 km) of road data, gzipped JSON on disk.
+TILE_DEG = 0.01
+TILE_DIR = Path(os.getenv("OSM_TILE_DIR", Path(__file__).resolve().parents[2] / "data" / "osm_tiles"))
+TILE_MAX_AGE_S = 60 * 24 * 3600  # roads change slowly; refresh tiles every ~2 months
 ROAD_TYPES = (
     "trunk|primary|secondary|tertiary|unclassified|residential|living_street|service"
     "|trunk_link|primary_link|secondary_link|tertiary_link"
@@ -56,7 +65,70 @@ def parse_overpass(data: dict) -> RoadGraph:
     return RoadGraph(nodes, adj, oneway)
 
 
+# ---------- tile cache ----------
+def tile_of(lat: float, lon: float) -> tuple[int, int]:
+    return math.floor(lat / TILE_DEG), math.floor(lon / TILE_DEG)
+
+
+def tiles_for_circle(position: LatLon, radius_m: float) -> list[tuple[int, int]]:
+    dlat = radius_m / 111_195
+    dlon = radius_m / (111_195 * math.cos(math.radians(position[0])))
+    i0, j0 = tile_of(position[0] - dlat, position[1] - dlon)
+    i1, j1 = tile_of(position[0] + dlat, position[1] + dlon)
+    return [(i, j) for i in range(i0, i1 + 1) for j in range(j0, j1 + 1)]
+
+
+def _tile_path(t: tuple[int, int]) -> Path:
+    return TILE_DIR / f"{t[0]}_{t[1]}.json.gz"
+
+
+def load_tile(t: tuple[int, int]) -> list[dict] | None:
+    path = _tile_path(t)
+    if not path.exists() or time.time() - path.stat().st_mtime > TILE_MAX_AGE_S:
+        return None
+    with gzip.open(path, "rt") as fh:
+        return json.load(fh)["elements"]
+
+
+def save_tile(t: tuple[int, int], elements: list[dict]) -> None:
+    TILE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _tile_path(t).with_suffix(".tmp")
+    with gzip.open(tmp, "wt") as fh:
+        json.dump({"elements": elements}, fh)
+    tmp.replace(_tile_path(t))
+
+
+def fetch_tile(t: tuple[int, int], timeout_s: int = 90) -> list[dict]:
+    """Download one tile from Overpass (for the prewarm script: patient, not used mid-ride)."""
+    s, w = t[0] * TILE_DEG, t[1] * TILE_DEG
+    bbox = f"{s:.4f},{w:.4f},{s + TILE_DEG:.4f},{w + TILE_DEG:.4f}"
+    query = f'[out:json][timeout:{timeout_s}];way({bbox})[highway~"^({ROAD_TYPES})$"];(._;>;);out body;'
+    errors = []
+    for url in OVERPASS_URLS:
+        try:
+            with client(timeout=timeout_s + 10) as c:
+                return c.post(url, data={"data": query}).raise_for_status().json()["elements"]
+        except Exception as exc:
+            errors.append(f"{url.split('/')[2]}: {type(exc).__name__}")
+    raise RuntimeError("tile download failed: " + "; ".join(errors))
+
+
+def cached_roads(position: LatLon, radius_m: float) -> RoadGraph | None:
+    """Road graph from cached tiles, if every tile the circle touches is cached."""
+    merged: dict[tuple[str, int], dict] = {}
+    for t in tiles_for_circle(position, radius_m):
+        els = load_tile(t)
+        if els is None:
+            return None
+        for el in els:
+            merged[(el["type"], el["id"])] = el
+    return parse_overpass({"elements": list(merged.values())})
+
+
 def fetch_roads(position: LatLon, radius_m: float = 800) -> RoadGraph:
+    cached = cached_roads(position, radius_m)
+    if cached is not None:
+        return cached
     query = (
         f'[out:json][timeout:{OVERPASS_TIMEOUT_S}];way(around:{radius_m:.0f},{position[0]},{position[1]})'
         f'[highway~"^({ROAD_TYPES})$"];(._;>;);out body;'
