@@ -1,9 +1,13 @@
 # Render blueprint: New > Blueprint > pick this repo. Gives you an https://<name>.onrender.com address.
+#
+# FREE plan (pilot): sleeps after 15 min without requests (the next ride start can take up to ~1 min
+# to wake it), and the disk is temporary, so registered bikes and service logs are lost on every
+# restart or deploy. To keep data and avoid the wake-up delay, switch to the paid plan below.
 services:
   - type: web
     name: moto-ai
     runtime: docker
-    plan: starter            # a paid plan is needed for the persistent disk below
+    plan: free
     region: singapore        # closest Render region to Manila
     healthCheckPath: /health
     autoDeploy: true
@@ -16,7 +20,8 @@ services:
         value: DRIVE
       - key: LLM_MODEL
         value: claude-sonnet-5-5
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
+    # Paid plan with a persistent database: set `plan: starter` and uncomment:
+    # disk:
+    #   name: data
+    #   mountPath: /data
+    #   sizeGB: 1
