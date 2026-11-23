@@ -1,0 +1,9 @@
+{
+  "url": "https://github.com/ashandilgith/motorcycle_AI/releases/download/road-data/region_tiles-20261123-1334.tar",
+  "sha256": "f7abb7a2f2e2d30aea17837470bd74c2bd27c66afbc75c42c513464f48eb52b5",
+  "bytes": 43980800,
+  "tiles": 21000,
+  "bbox": "13.50,120.55,15.25,121.75",
+  "built": "2026-11-23",
+  "source": "OpenStreetMap via Geofabrik philippines-latest.osm.pbf, (c) OpenStreetMap contributors, ODbL"
+}
