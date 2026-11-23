@@ -141,12 +141,15 @@ def split_into_tiles(elements: list[dict]) -> dict[tuple[int, int], list[dict]]:
     return {t: list(b.values()) for t, b in tiles.items()}
 
 
-def cached_roads(position: LatLon, radius_m: float) -> RoadGraph | None:
-    """Road graph from cached tiles, if every tile the circle touches is cached."""
+def cached_roads(position: LatLon, radius_m: float, allow_partial: bool = False) -> RoadGraph | None:
+    """Road graph from cached tiles. Needs every tile the circle touches, unless allow_partial,
+    in which case the rider's own tile is enough (near the edge of the cached area)."""
     merged: dict[tuple[str, int], dict] = {}
     for t in tiles_for_circle(position, radius_m):
         els = load_tile(t)
         if els is None:
+            if allow_partial and t != tile_of(*position):
+                continue
             return None
         for el in els:
             merged[(el["type"], el["id"])] = el
@@ -157,6 +160,9 @@ def fetch_roads(position: LatLon, radius_m: float = 800) -> RoadGraph:
     cached = cached_roads(position, radius_m)
     if cached is not None:
         return cached
+    partial = cached_roads(position, radius_m, allow_partial=True)
+    if partial is not None and partial.adj:
+        return partial  # edge of the cached area: use what we have rather than wait on Overpass
     query = (
         f'[out:json][timeout:{OVERPASS_TIMEOUT_S}];way(around:{radius_m:.0f},{position[0]},{position[1]})'
         f'[highway~"^({ROAD_TYPES})$"];(._;>;);out body;'

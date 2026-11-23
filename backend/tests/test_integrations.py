@@ -1,5 +1,6 @@
 """Integration code tested against mocked APIs (no network, no keys)."""
 import json
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -100,6 +101,13 @@ def test_snap_and_places():
     assert len(google_maps.snap_to_roads(ROAD, "k")) == len(ROAD)  # sent in 2 batches of <=100
     shops = google_maps.repair_shops(ORIGIN, "k")
     assert shops[0]["name"] == "JM Motorshop" and shops[0]["open_now"] is True
+
+
+@pytest.fixture(autouse=True)
+def fresh_weather_cache():
+    weather._cache.clear()
+    yield
+    weather._cache.clear()
 
 
 def test_weather_wet_at_night():
@@ -272,3 +280,33 @@ def test_tiles_from_osm_extract(tmp_path, monkeypatch):
     graph = osm.fetch_roads(offset(ORIGIN, 2, 5), 600)
     ahead = osm.road_ahead(graph, offset(ORIGIN, 2, 5), 0, 600)
     assert ahead[-1][1] > ORIGIN[1] + 0.0004
+
+
+def test_weather_falls_back_to_met_norway_then_cache():
+    metno = {"properties": {"timeseries": [{"data": {"instant": {"details": {}}, "next_1_hours": {"details": {"precipitation_amount": 1.4}}}}]}}
+    calls = []
+
+    def h(req):
+        calls.append(req.url.host)
+        if req.url.host == "api.open-meteo.com":
+            return httpx.Response(429, text="Too Many Requests")
+        return httpx.Response(200, json=metno)
+
+    http.set_transport(httpx.MockTransport(h))
+    wx = weather.road_weather(ORIGIN)
+    assert wx.source == "met.no" and wx.wet and calls == ["api.open-meteo.com", "api.met.no"]
+    assert weather.road_weather(ORIGIN) is wx and len(calls) == 2  # cached: no new calls
+    # everything down, cache expired but recent: serve the last reading, marked cached
+    weather._cache[(round(ORIGIN[0], 1), round(ORIGIN[1], 1))] = (time.time() - 1800, wx)
+    http.set_transport(httpx.MockTransport(lambda r: httpx.Response(503)))
+    stale = weather.road_weather(ORIGIN)
+    assert stale.wet and stale.source.endswith("(cached)")
+
+
+def test_edge_of_cached_area_uses_partial_tiles(tmp_path, monkeypatch):
+    monkeypatch.setattr(osm, "TILE_DIR", tmp_path)
+    pieces = osm.split_into_tiles(overpass_payload()["elements"])
+    osm.save_tile(osm.tile_of(*ORIGIN), pieces[osm.tile_of(*ORIGIN)])  # only the rider's tile
+    http.set_transport(httpx.MockTransport(lambda r: httpx.Response(502)))  # live servers down
+    graph = osm.fetch_roads(ORIGIN, radius_m=3000)
+    assert graph.adj
